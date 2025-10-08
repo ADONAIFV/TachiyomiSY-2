@@ -8,17 +8,13 @@
   },
   "rewrites": [
     {
-      "source": "/api/:match*",
-      "destination": "/api"
-    },
-    {
-      "source": "/:match((?!api/|favicon.ico).*)",
+      "source": "/(.*)",
       "destination": "/api"
     }
   ],
   "headers": [
     {
-      "source": "/api/(.*)",
+      "source": "/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
