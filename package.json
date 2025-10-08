@@ -1,0 +1,28 @@
+{
+  "name": "bandwidth-hero-super-ultra",
+  "version": "5.0.0",
+  "description": "Compresión de imágenes extrema, inteligente y robusta para Tachiyomi",
+  "main": "api/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "echo 'Proyecto listo para deploy en Vercel'",
+    "test": "echo 'No hay tests definidos'"
+  },
+  "dependencies": {
+    "abort-controller": "^3.0.0",
+    "node-fetch": "^3.3.2",
+    "sharp": "^0.33.4"
+  },
+  "keywords": [
+    "image-compression",
+    "tachiyomi",
+    "manga",
+    "manhua",
+    "vercel-serverless"
+  ],
+  "author": "TuNombreDeUsuario",
+  "license": "MIT"
+}

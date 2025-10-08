@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:match*",
+      "destination": "/api"
+    },
+    {
+      "source": "/:match((?!api/|favicon.ico).*)",
+      "destination": "/api"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
+        { "key": "Access-Control-Expose-Headers", "value": "X-Original-Size, X-Compressed-Size, X-Image-Status" }
+      ]
+    }
+  ]
+}
