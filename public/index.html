@@ -70,9 +70,16 @@
         
         try {
             const response = await fetch(apiUrl);
+
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`Error del servidor (${response.status}): ${errorData.error}`);
+                let errorMessage = `Error del servidor (${response.status})`;
+                try {
+                    const errorData = await response.json();
+                    errorMessage += `: ${errorData.error || 'Error desconocido'}`;
+                } catch (jsonError) {
+                    errorMessage += `. Detalles: ${await response.text()}`;
+                }
+                throw new Error(errorMessage);
             }
 
             const blob = await response.blob();
@@ -94,14 +101,14 @@
         document.getElementById('compressed-img').src = compressedUrl;
 
         const formatBytes = (bytes) => {
-            if (!bytes || bytes === 0) return 'N/A';
+            if (!bytes || bytes === 0 || bytes === 'N/A') return 'N/A';
             const k = 1024;
             const sizes = ['Bytes', 'KB', 'MB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         };
 
-        const savings = 100 - (compressedSize / originalSize * 100);
+        const savings = (originalSize && compressedSize) ? 100 - (compressedSize / originalSize * 100) : 0;
         
         document.getElementById('original-stats').textContent = `Tamaño: ${formatBytes(originalSize)}`;
         document.getElementById('compressed-stats').innerHTML = `Tamaño: ${formatBytes(compressedSize)} <br><strong>Ahorro: ${savings.toFixed(1)}%</strong>`;
@@ -110,4 +117,4 @@
     }
 </script>
 </body>
-</html>
+</html> 
