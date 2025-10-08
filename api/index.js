@@ -39,18 +39,24 @@ export default async function handler(req, res) {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const headResponse = await fetch(imageUrl, { method: 'HEAD', headers: HYPER_REALISTIC_HEADERS, signal: controller.signal });
-    const contentLength = headResponse.headers.get('content-length');
+    // --- LÓGICA DE DESCARGA CORREGIDA Y MÁS COMPATIBLE ---
+    const response = await fetch(imageUrl, { headers: HYPER_REALISTIC_HEADERS, signal: controller.signal });
+    if (!response.ok) {
+        throw new Error(`Error al obtener la imagen: ${response.status} ${response.statusText}`);
+    }
 
+    const contentLength = response.headers.get('content-length');
     if (contentLength && parseInt(contentLength, 10) > MAX_INPUT_SIZE_BYTES) {
       throw new Error(`La imagen excede el límite de ${MAX_INPUT_SIZE_BYTES / 1024 / 1024} MB`);
     }
 
-    const response = await fetch(imageUrl, { headers: HYPER_REALISTIC_HEADERS, signal: controller.signal });
-    if (!response.ok) throw new Error(`Error al obtener la imagen: ${response.status} ${response.statusText}`);
-    
     const originalBuffer = await response.buffer();
     const originalSize = originalBuffer.length;
+    // Comprobación de tamaño post-descarga por si el header no existía
+    if (originalSize > MAX_INPUT_SIZE_BYTES) {
+        throw new Error(`La imagen (tamaño real) excede el límite de ${MAX_INPUT_SIZE_BYTES / 1024 / 1024} MB`);
+    }
+
     const originalContentType = response.headers.get('content-type') || 'image/jpeg';
     
     const metadata = await sharp(originalBuffer).metadata();
@@ -110,4 +116,4 @@ function sendOriginal(res, buffer, contentType) {
   res.setHeader('X-Original-Size', buffer.length);
   res.setHeader('X-Compressed-Size', buffer.length);
   res.send(buffer);
-}
+             }
