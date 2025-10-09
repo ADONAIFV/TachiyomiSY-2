@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
-import { AbortController } from 'abort-controller';
+// NO SE IMPORTA NADA MÁS. AbortController es nativo.
 
 // --- CONFIGURACIÓN "COHETE DE UN SOLO DISPARO" ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
@@ -42,30 +42,25 @@ export default async function handler(req, res) {
       headers: getHeaders(domain)
     });
 
-    if (!response.ok) throw new Error(`Error HTTP al obtener la imagen: ${response.status}`);
+    if (!response.ok) throw new Error(`Error al obtener la imagen: ${response.status} ${response.statusText}`);
 
+    const originalContentTypeHeader = response.headers.get('content-type');
+    if (!originalContentTypeHeader || !originalContentTypeHeader.startsWith('image/')) {
+      throw new Error(`La URL no devolvió una imagen válida. Content-Type: ${originalContentTypeHeader || 'ninguno'}`);
+    }
+    
     const arrayBuffer = await response.arrayBuffer();
     const originalBuffer = Buffer.from(arrayBuffer);
     
     const originalSize = originalBuffer.length;
     if (originalSize === 0) throw new Error("La imagen descargada está vacía.");
-
-    // --- EL PASO DEL GUARDIÁN: VERIFICACIÓN INFALIBLE ---
-    let metadata;
-    try {
-      metadata = await sharp(originalBuffer).metadata();
-    } catch (e) {
-      // Si sharp no puede leer los metadatos, no es una imagen válida.
-      throw new Error("El archivo descargado no es una imagen válida, activando fallback.");
-    }
-    
     if (originalSize > MAX_INPUT_SIZE_BYTES) throw new Error(`La imagen excede el límite.`);
-    
+
+    const metadata = await sharp(originalBuffer).metadata();
     if (metadata.pages && metadata.pages > 1) {
-      return sendOriginal(res, originalBuffer, response.headers.get('content-type'));
+      return sendOriginal(res, originalBuffer, originalContentTypeHeader);
     }
     
-    // --- PIPELINE ULTRA-RÁPIDO ---
     const compressedBuffer = await sharp(originalBuffer)
       .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
       .trim()
@@ -78,7 +73,7 @@ export default async function handler(req, res) {
     if (compressedSize < originalSize) {
       return sendCompressed(res, compressedBuffer, originalSize, compressedSize);
     } else {
-      return sendOriginal(res, originalBuffer, response.headers.get('content-type'));
+      return sendOriginal(res, originalBuffer, originalContentTypeHeader);
     }
     
   } catch (error) {
@@ -105,4 +100,4 @@ function sendOriginal(res, buffer, contentType) {
   res.setHeader('X-Original-Size', buffer.length);
   res.setHeader('X-Compressed-Size', buffer.length);
   res.send(buffer);
-}
+        }
