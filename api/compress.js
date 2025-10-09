@@ -1,30 +1,30 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 import { AbortController } from 'abort-controller';
+import fs from 'fs/promises';
+import path from 'path';
 
-// --- CONFIGURACIÓN HYPER-COMPRESSION ---
+// --- CONFIGURACIÓN FINAL ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 25000;
+const FETCH_TIMEOUT_MS = 12000; // Un timeout más corto y razonable: 12 segundos
 const MAX_IMAGE_WIDTH = 1080;
 
-// --- LA "LLAVE MAESTRA": HEADERS IDÉNTICOS AL ORIGINAL ---
+// --- HEADERS GENÉRICOS DE NAVEGADOR (Menos sospechosos que los de móvil) ---
 function getHeaders(domain) {
   return {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
     'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Referer': domain + '/',
-    'Upgrade-Insecure-Requests': '1'
+    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+    'Referer': domain + '/'
   };
 }
 
-// --- NUEVA LÓGICA DE SELECCIÓN DE FORMATO CON CALIDAD AGRESIVA ---
+// --- LÓGICA DE HYPER-COMPRESSION ---
 function getBestFormat(acceptHeader = '') {
   if (acceptHeader && acceptHeader.includes('image/avif')) {
-    return { format: 'avif', contentType: 'image/avif', quality: 45 }; // Calidad muy agresiva para AVIF
+    return { format: 'avif', contentType: 'image/avif', quality: 45 };
   }
-  return { format: 'webp', contentType: 'image/webp', quality: 50 }; // Calidad muy agresiva para WebP
+  return { format: 'webp', contentType: 'image/webp', quality: 50 };
 }
 
 export default async function handler(req, res) {
@@ -72,12 +72,10 @@ export default async function handler(req, res) {
     const clientAcceptHeader = req.headers.accept;
     const targetFormat = getBestFormat(clientAcceptHeader);
     
-    // --- PIPELINE DE HYPER-COMPRESSION ---
     const compressedBuffer = await sharp(originalBuffer)
       .trim()
       .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
-      // El arma secreta: reduce la paleta de colores a 256. ¡Ahorro masivo!
-      .png({ colours: 256 }) 
+      .png({ colours: 256 }) // Quantization para máxima compresión
       [targetFormat.format]({ quality: targetFormat.quality })
       .toBuffer();
     
@@ -98,5 +96,6 @@ export default async function handler(req, res) {
   }
 }
 
-function sendCompressed(res, buffer, originalSize, compressedSize, contentType) { /* ... (sin cambios) ... */ }
-function sendOriginal(res, buffer, contentType) { /* ... (sin cambios) ... */ }
+// ... Las funciones sendCompressed y sendOriginal se mantienen igual
+function sendCompressed(res, buffer, originalSize, compressedSize, contentType) { /* ... */ }
+function sendOriginal(res, buffer, contentType) { /* ... */ }
