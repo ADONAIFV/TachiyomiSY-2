@@ -1,16 +1,10 @@
 {
   "version": 2,
   "functions": {
-    "api/index.js": {
+    "api/compress.js": {
       "maxDuration": 60
     }
   },
-  "rewrites": [
-    {
-      "source": "/api/compress",
-      "destination": "/api"
-    }
-  ],
   "headers": [
     {
       "source": "/api/compress",
