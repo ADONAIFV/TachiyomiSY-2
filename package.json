@@ -1,25 +1,24 @@
 {
-  "version": 2,
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 60,
-      "memory": 1024
-    }
+  "name": "bandwidth-hero-super-ultra",
+  "version": "5.1.0",
+  "description": "Compresión de imágenes extrema, inteligente y robusta para Tachiyomi",
+  "main": "api/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api"
-    }
+  "dependencies": {
+    "abort-controller": "^3.0.0",
+    "node-fetch": "^3.3.2",
+    "sharp": "^0.33.4"
+  },
+  "keywords": [
+    "image-compression",
+    "tachiyomi",
+    "manga",
+    "manhua",
+    "vercel-serverless"
   ],
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
-        { "key": "Access-Control-Expose-Headers", "value": "X-Original-Size, X-Compressed-Size, X-Image-Status" }
-      ]
-    }
-  ]
+  "author": "ASTAROTH",
+  "license": "MIT"
 }
