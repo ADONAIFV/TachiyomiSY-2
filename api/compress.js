@@ -4,7 +4,7 @@ import { AbortController } from 'abort-controller';
 
 // --- CONFIGURACIÓN ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 25000;
+const FETCH_TIMEOUT_MS = 25000; // Un timeout generoso pero que no agota los 60s
 const MAX_IMAGE_WIDTH = 1080;
 
 // --- LÓGICA DE SELECCIÓN DE FORMATO ---
@@ -37,7 +37,7 @@ export default async function handler(req, res) {
     const response = await fetch(imageUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
         'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
         'Referer': domain + '/',
         'Connection': 'keep-alive'
@@ -107,4 +107,4 @@ function sendOriginal(res, buffer, contentType) {
   res.setHeader('X-Original-Size', buffer.length);
   res.setHeader('X-Compressed-Size', buffer.length);
   res.send(buffer);
-  }
+                          }
