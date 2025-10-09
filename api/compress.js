@@ -2,11 +2,13 @@ import fetch from 'node-fetch';
 import sharp from 'sharp';
 import { AbortController } from 'abort-controller';
 
-// --- CONFIGURACIÓN FINAL ---
+// --- CONFIGURACIÓN DE FUSIÓN (Original + Mejoras) ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 20000; // 20 segundos de paciencia
-const MAX_IMAGE_WIDTH = 1080;
-const WEBP_QUALITY = 55; // Calidad WebP agresiva pero legible
+const FETCH_TIMEOUT_MS = 20000;
+// --- LA FILOSOFÍA ORIGINAL: RESOLUCIÓN AGRESIVA ---
+const MAX_IMAGE_WIDTH = 600;
+// --- LA FILOSOFÍA ORIGINAL: CALIDAD EXTREMA ---
+const WEBP_QUALITY = 5;
 
 // --- HEADERS DE TU SCRIPT ORIGINAL (LA LLAVE MAESTRA) ---
 function getHeaders(domain) {
@@ -61,15 +63,18 @@ export default async function handler(req, res) {
       return sendOriginal(res, originalBuffer, originalContentTypeHeader);
     }
     
-    // --- PIPELINE DE COMPRESIÓN DIRECTO A WEBP ---
+    // --- PIPELINE DE HYPER-COMPRESSION MEJORADO ---
     const compressedBuffer = await sharp(originalBuffer)
-      .trim()
-      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
-      .webp({ quality: WEBP_QUALITY })
+      .trim() // Mejora: Eliminar bordes innecesarios.
+      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true }) // Filosofía Original: 600px.
+      // --- NUESTRA ARMA SECRETA: QUANTIZATION ---
+      .png({ colours: 256 }) // Mejora: Reduce la paleta antes de comprimir.
+      .webp({ quality: WEBP_QUALITY, effort: 6 }) // Filosofía Original: Calidad 5 + Máximo esfuerzo.
       .toBuffer();
     
     const compressedSize = compressedBuffer.length;
 
+    // Solo servimos nuestra versión si es realmente más pequeña.
     if (compressedSize < originalSize) {
       return sendCompressed(res, compressedBuffer, originalSize, compressedSize, 'image/webp');
     } else {
@@ -85,7 +90,7 @@ export default async function handler(req, res) {
   }
 }
 
-// --- FUNCIONES HELPER (LA CAUSA DEL CRASH ANTERIOR) ---
+// --- FUNCIONES HELPER ---
 function sendCompressed(res, buffer, originalSize, compressedSize, contentType) {
   res.setHeader('Cache-Control', 's-maxage=31536000, stale-while-revalidate');
   res.setHeader('Content-Type', contentType);
