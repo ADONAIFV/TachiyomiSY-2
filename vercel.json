@@ -1,18 +1,16 @@
 {
-  "version": 2,
-  "functions": {
-    "api/compress.js": {
-      "maxDuration": 60
-    }
+  "name": "bandwidth-hero-super-ultra",
+  "version": "7.0.0",
+  "description": "Compresión de imágenes extrema, inteligente y robusta para Tachiyomi",
+  "main": "api/compress.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "headers": [
-    {
-      "source": "/api/compress",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
-        { "key": "Access-Control-Expose-Headers", "value": "X-Original-Size, X-Compressed-Size, X-Image-Status" }
-      ]
-    }
-  ]
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "sharp": "^0.33.4"
+  },
+  "author": "TuNombreDeUsuario",
+  "license": "MIT"
 }
