@@ -1,27 +1,17 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 import { AbortController } from 'abort-controller';
-import fs from 'fs/promises';
-import path from 'path';
 
 // --- CONFIGURACIÓN ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 15000;
+const FETCH_TIMEOUT_MS = 25000;
 const MAX_IMAGE_WIDTH = 1080;
-const HYPER_REALISTIC_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-  'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-  'Referer': 'https://www.google.com/'
-};
 
-// --- NUEVA LÓGICA DE SELECCIÓN DE FORMATO (MÁS SIMPLE Y ROBUSTA) ---
+// --- LÓGICA DE SELECCIÓN DE FORMATO ---
 function getBestFormat(acceptHeader = '') {
-  if (acceptHeader.includes('image/avif')) {
-    // Para navegadores modernos, usamos la máxima compresión
+  if (acceptHeader && acceptHeader.includes('image/avif')) {
     return { format: 'avif', contentType: 'image/avif', quality: 55 };
   }
-  // Para todos los demás (incluido Tachiyomi), usamos WebP. Es el estándar de oro.
   return { format: 'webp', contentType: 'image/webp', quality: 65 };
 }
 
@@ -40,7 +30,20 @@ export default async function handler(req, res) {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const response = await fetch(imageUrl, { headers: HYPER_REALISTIC_HEADERS, signal: controller.signal });
+    // --- USANDO LOS HEADERS Y LA LÓGICA DE TU SCRIPT ORIGINAL ---
+    const parsedUrl = new URL(imageUrl);
+    const domain = parsedUrl.origin;
+    
+    const response = await fetch(imageUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+        'Referer': domain + '/',
+        'Connection': 'keep-alive'
+      }
+    });
+
     if (!response.ok) throw new Error(`Error al obtener la imagen: ${response.status} ${response.statusText}`);
 
     const originalContentTypeHeader = response.headers.get('content-type');
@@ -48,8 +51,11 @@ export default async function handler(req, res) {
       throw new Error(`La URL no devolvió una imagen válida. Content-Type: ${originalContentTypeHeader || 'ninguno'}`);
     }
     
-    const originalBuffer = await response.buffer();
+    const arrayBuffer = await response.arrayBuffer();
+    const originalBuffer = Buffer.from(arrayBuffer);
+    
     const originalSize = originalBuffer.length;
+    if (originalSize === 0) throw new Error("La imagen descargada está vacía (0 bytes).");
     if (originalSize > MAX_INPUT_SIZE_BYTES) throw new Error(`La imagen excede el límite de tamaño.`);
 
     const metadata = await sharp(originalBuffer).metadata();
@@ -61,13 +67,12 @@ export default async function handler(req, res) {
     const clientAcceptHeader = req.headers.accept;
     const targetFormat = getBestFormat(clientAcceptHeader);
     
-    let imageProcessor = sharp(originalBuffer)
+    const compressedBuffer = await sharp(originalBuffer)
       .trim()
-      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true });
-      
-    imageProcessor = imageProcessor[targetFormat.format]({ quality: targetFormat.quality });
+      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
+      [targetFormat.format]({ quality: targetFormat.quality })
+      .toBuffer();
     
-    const compressedBuffer = await imageProcessor.toBuffer();
     const compressedSize = compressedBuffer.length;
 
     if (compressedSize < originalSize) {
@@ -79,11 +84,10 @@ export default async function handler(req, res) {
     }
     
   } catch (error) {
-    console.error("[CRITICAL ERROR]", { errorMessage: error.message });
-    const fallbackBuffer = await fs.readFile(path.join(process.cwd(), 'public', 'error.png'));
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('X-Image-Status', 'Error-Fallback');
-    res.status(200).send(fallbackBuffer);
+    // --- USANDO EL FALLBACK DE REDIRECCIÓN DE TU SCRIPT ORIGINAL ---
+    console.error("[FALLBACK ACTIVADO]", { url: imageUrl, errorMessage: error.message });
+    res.setHeader('Location', imageUrl);
+    res.status(302).send('Redireccionando a la fuente original por un error.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -103,4 +107,4 @@ function sendOriginal(res, buffer, contentType) {
   res.setHeader('X-Original-Size', buffer.length);
   res.setHeader('X-Compressed-Size', buffer.length);
   res.send(buffer);
-                }
+  }
