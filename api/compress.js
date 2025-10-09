@@ -1,13 +1,26 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 import { AbortController } from 'abort-controller';
+import fs from 'fs/promises';
+import path from 'path';
 
 // --- CONFIGURACIÓN ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 25000; // Un timeout generoso pero que no agota los 60s
+const FETCH_TIMEOUT_MS = 25000;
 const MAX_IMAGE_WIDTH = 1080;
 
-// --- LÓGICA DE SELECCIÓN DE FORMATO ---
+// --- LA "LLAVE MAESTRA": HEADERS IDÉNTICOS AL ORIGINAL ---
+function getHeaders(domain) {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
+    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Referer': domain + '/',
+    'Upgrade-Insecure-Requests': '1'
+  };
+}
+
 function getBestFormat(acceptHeader = '') {
   if (acceptHeader && acceptHeader.includes('image/avif')) {
     return { format: 'avif', contentType: 'image/avif', quality: 55 };
@@ -30,18 +43,12 @@ export default async function handler(req, res) {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    // --- USANDO LOS HEADERS Y LA LÓGICA DE TU SCRIPT ORIGINAL ---
     const parsedUrl = new URL(imageUrl);
     const domain = parsedUrl.origin;
     
     const response = await fetch(imageUrl, {
       signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
-        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-        'Referer': domain + '/',
-        'Connection': 'keep-alive'
-      }
+      headers: getHeaders(domain)
     });
 
     if (!response.ok) throw new Error(`Error al obtener la imagen: ${response.status} ${response.statusText}`);
@@ -84,7 +91,6 @@ export default async function handler(req, res) {
     }
     
   } catch (error) {
-    // --- USANDO EL FALLBACK DE REDIRECCIÓN DE TU SCRIPT ORIGINAL ---
     console.error("[FALLBACK ACTIVADO]", { url: imageUrl, errorMessage: error.message });
     res.setHeader('Location', imageUrl);
     res.status(302).send('Redireccionando a la fuente original por un error.');
@@ -107,4 +113,4 @@ function sendOriginal(res, buffer, contentType) {
   res.setHeader('X-Original-Size', buffer.length);
   res.setHeader('X-Compressed-Size', buffer.length);
   res.send(buffer);
-                          }
+              }
