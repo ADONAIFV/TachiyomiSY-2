@@ -8,7 +8,7 @@
   },
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!favicon.ico).*)",
       "destination": "/api"
     }
   ],
