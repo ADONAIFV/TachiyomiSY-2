@@ -1,7 +1,6 @@
 {
   "name": "bandwidth-hero-super-ultra",
   "version": "7.0.0",
-  "description": "Compresión de imágenes extrema, inteligente y robusta para Tachiyomi",
   "main": "api/compress.js",
   "type": "module",
   "engines": {
@@ -14,3 +13,4 @@
   "author": "TuNombreDeUsuario",
   "license": "MIT"
 }
+
