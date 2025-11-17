@@ -2,21 +2,22 @@
   "version": 2,
   "public": true,
   "rewrites": [
-    // 1. Redirige la ruta principal (/) al archivo HTML
-    { "source": "/", "destination": "/public/index.html" },
-    // 2. Mapea la API
-    { "source": "/api/compress", "destination": "/api/compress.js" }
+    { 
+      "source": "/", 
+      "destination": "/public/index.html" 
+    },
+    { 
+      "source": "/api/compress", 
+      "destination": "/api/compress.js" 
+    }
   ],
   "builds": [
-    // 3. Configuración para el Serverless Function (API)
     {
       "src": "api/compress.js",
       "use": "@vercel/node",
       "config": {
-        // Asegúrate de incluir el archivo de imagen de error para que la API lo use.
         "includeFiles": ["public/error.png"]
       }
     }
-    // No necesitamos un "build" explícito para la carpeta "public" con esta configuración.
   ]
 }
