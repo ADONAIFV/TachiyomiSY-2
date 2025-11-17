@@ -1,27 +1,26 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
-// NOTA DE OPTIMIZACIÓN: Se ha eliminado 'import { AbortController } from 'abort-controller';'
-// porque Node.js 18+ (especificado en package.json) lo incluye de forma nativa.
+// Nota: 'abort-controller' ha sido eliminado, utilizando la funcionalidad nativa de Node.js 18.
 
 // --- CONFIGURACIÓN FINAL DE PRODUCCIÓN ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024; // Límite de 30MB
-const FETCH_TIMEOUT_MS = 20000; // 20 segundos para el timeout de la petición de imagen
+const MIN_IMAGE_SIZE_BYTES = 5 * 1024;        // Nuevo: Mínimo 5KB para evitar Ads/Placeholders
+const FETCH_TIMEOUT_MS = 20000; // 20 segundos para el timeout de la petición
 const MAX_IMAGE_WIDTH = 600; // Ancho máximo para la compresión
 const WEBP_QUALITY = 5; // Calidad WEBP muy agresiva
 
 // --- HEADERS "LLAVE MAESTRA" ---
-// Establecer headers de forma dinámica y robusta.
 function getHeaders(req) {
   const refererHeader = req.headers.referer || req.headers['x-forwarded-host'];
   let domain = 'https://www.google.com/';
 
   if (refererHeader) {
       try {
-          // Intentar parsear el dominio desde el referer
+          // Intenta crear una URL para obtener el dominio Referer
           const url = new URL(refererHeader.startsWith('http') ? refererHeader : `https://${refererHeader}`);
           domain = url.origin;
       } catch (e) {
-          // Si falla, usar el valor por defecto
+          // Si falla, usa el valor por defecto
       }
   }
 
@@ -41,18 +40,16 @@ export default async function handler(req, res) {
   
   const { url: imageUrl } = req.query;
 
-  // 1. Manejo de URL y errores 400
   if (!imageUrl) {
     return res.status(400).send('Error 400: Parámetro "url" faltante.');
   }
 
-  // 2. Control de Aborto y Timeout
+  // Control de Aborto y Timeout (Nativo)
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  const domain = new URL(imageUrl).origin;
 
   try {
-    // 3. Obtener cabeceras y realizar la petición
+    // Obtener cabeceras y realizar la petición
     const headers = getHeaders(req);
     const fetchOptions = {
         method: 'GET',
@@ -62,87 +59,75 @@ export default async function handler(req, res) {
 
     const response = await fetch(imageUrl, fetchOptions);
 
-    // 4. Chequeo de estado y manejo de redirecciones
+    // 1. Chequeo de estado HTTP
     if (!response.ok) {
-        // Si la imagen no se puede obtener, redirigir inmediatamente a la original (Fallback Inteligente)
         return redirectToOriginal(res, imageUrl, `URL no accesible (HTTP ${response.status})`);
     }
 
     const originalContentTypeHeader = response.headers.get('content-type');
-    const contentLength = response.headers.get('content-length');
     
-    // 5. Validaciones de Contenido
-    if (!originalContentTypeHeader || !originalContentTypeHeader.startsWith('image/')) {
-        return redirectToOriginal(res, imageUrl, 'Contenido no es una imagen');
+    // 2. VALIDACIÓN CRÍTICA: Bloquear HTML/JSON (Login, Captcha, Errores)
+    if (!originalContentTypeHeader || originalContentTypeHeader.includes('text/html') || originalContentTypeHeader.includes('application/json')) {
+        return redirectToOriginal(res, imageUrl, `Contenido no es imagen: ${originalContentTypeHeader || 'desconocido'}. Posiblemente un login o ad.`);
     }
 
-    if (contentLength && parseInt(contentLength, 10) > MAX_INPUT_SIZE_BYTES) {
-        return redirectToOriginal(res, imageUrl, 'Imagen demasiado grande');
+    // 3. Validar que es un tipo de imagen
+    if (!originalContentTypeHeader.startsWith('image/')) {
+        return redirectToOriginal(res, imageUrl, 'Contenido no es un tipo de imagen válido (e.g., image/*)');
     }
 
-    // 6. Carga de la imagen en memoria y chequeo de tamaño
+    // Carga de la imagen en memoria y chequeo de tamaño
     const originalBuffer = await response.buffer();
     const originalSize = originalBuffer.length;
 
     if (originalSize > MAX_INPUT_SIZE_BYTES) {
-        return redirectToOriginal(res, imageUrl, 'Imagen demasiado grande (después de la carga)');
+        return redirectToOriginal(res, imageUrl, `Imagen demasiado grande (${(originalSize / 1024 / 1024).toFixed(2)}MB)`);
+    }
+
+    // 4. NUEVA OPTIMIZACIÓN: Bloqueo de imágenes sospechosamente pequeñas (Ads, Error, Placeholder)
+    if (originalSize < MIN_IMAGE_SIZE_BYTES) {
+        return redirectToOriginal(res, imageUrl, `Imagen sospechosamente pequeña (${(originalSize / 1024).toFixed(2)}KB), bloqueada como posible ad/error.`);
     }
     
-    // 7. Compresión con Sharp (Optimización)
+    // Compresión con Sharp (Optimización)
     const compressedBuffer = await sharp(originalBuffer)
-      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true }) // Redimensionar si es necesario
-      .trim() // Eliminar bordes vacíos
-      // .png({ colours: 256 }) // Optimización PNG (útil para cómics)
-      .webp({ quality: WEBP_QUALITY, effort: 6 }) // WEBP: Calidad muy baja (5) con máximo esfuerzo (6)
+      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
+      .trim()
+      .webp({ quality: WEBP_QUALITY, effort: 6 })
       .toBuffer();
     
     const compressedSize = compressedBuffer.length;
 
-    // 8. Validación de Ahorro y Envío
+    // Validación de Ahorro y Envío
     if (compressedSize < originalSize) {
-      // Si la compresión es efectiva, enviar la imagen comprimida
       return sendCompressed(res, compressedBuffer, originalSize, compressedSize);
     } else {
-      // Si la compresión no ahorra espacio, enviar la imagen original
       return sendOriginal(res, originalBuffer, originalContentTypeHeader);
     }
     
   } catch (error) {
-    // 9. Manejo de errores de red o tiempo de espera
+    // Manejo de errores de Abort, Sharp o red
     if (error.name === 'AbortError') {
         return redirectToOriginal(res, imageUrl, 'Petición cancelada por timeout');
     }
+    
     // Para cualquier otro error (Sharp, DNS, SSL), activa la redirección.
-    return redirectToOriginal(res, imageUrl, error.message);
+    return redirectToOriginal(res, imageUrl, `Error de procesamiento o red: ${error.message}`);
   } finally {
-    // 10. Limpieza
     clearTimeout(timeoutId);
   }
 }
 
 // --- FUNCIONES HELPER ---
 
-/**
- * Redirige al cliente a la URL de la imagen original (Fallback Inteligente).
- * @param {object} res Objeto de respuesta de Vercel.
- * @param {string} imageUrl URL de la imagen original.
- * @param {string} reason Razón del fallback para el log.
- */
 function redirectToOriginal(res, imageUrl, reason) {
     console.error(`[FALLBACK INTELIGENTE ACTIVADO] para ${imageUrl}. Razón: ${reason}`);
     res.setHeader('Location', imageUrl);
     res.status(302).end(); 
 }
 
-/**
- * Envía la imagen comprimida.
- * @param {object} res Objeto de respuesta de Vercel.
- * @param {Buffer} buffer Buffer de imagen comprimida.
- * @param {number} originalSize Tamaño original.
- * @param {number} compressedSize Tamaño comprimido.
- */
 function sendCompressed(res, buffer, originalSize, compressedSize) {
-  // Caché CDN optimizado (Vercel Edge Cache)
+  // Caché CDN agresivo para la imagen comprimida
   res.setHeader('Cache-Control', 's-maxage=31536000, stale-while-revalidate'); 
   res.setHeader('Content-Type', 'image/webp');
   res.setHeader('X-Original-Size', originalSize);
@@ -150,16 +135,9 @@ function sendCompressed(res, buffer, originalSize, compressedSize) {
   res.send(buffer);
 }
 
-/**
- * Envía la imagen original (si la compresión no ahorró espacio).
- * @param {object} res Objeto de respuesta de Vercel.
- * @param {Buffer} buffer Buffer de imagen original.
- * @param {string} contentType Tipo de contenido original.
- */
 function sendOriginal(res, buffer, contentType) {
-  // La imagen original se sirve con menos caché (pueden ser imágenes grandes)
+  // Caché moderado para la imagen original (podría cambiar en la fuente)
   res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate'); 
   res.setHeader('Content-Type', contentType);
-  // Se omiten los headers X-Size para no confundir al cliente (tester)
   res.send(buffer);
 }
