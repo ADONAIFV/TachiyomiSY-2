@@ -68,7 +68,8 @@ export default async function handler(req, res) {
     const fetchOptions = {
         method: 'GET',
         headers: headers,
-        signal: controller.signal
+        signal: controller.signal,
+        redirect: 'follow' // <--- ¡AÑADIDO! Esto fuerza a 'node-fetch' a seguir el 302.
     };
 
     const response = await fetch(imageUrl, fetchOptions);
