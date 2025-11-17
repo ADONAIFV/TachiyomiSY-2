@@ -1,7 +1,5 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
-import { AbortController } from 'abort-controller';
-
 // --- CONFIGURACIÓN FINAL DE PRODUCCIÓN ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20000; // 20 segundos es un timeout final y robusto
@@ -105,3 +103,4 @@ function sendOriginal(res, buffer, contentType) {
   res.setHeader('X-Compressed-Size', buffer.length);
   res.send(buffer);
       }
+
