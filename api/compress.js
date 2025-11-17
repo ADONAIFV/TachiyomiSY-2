@@ -3,11 +3,10 @@ import sharp from 'sharp';
 
 // --- CONFIGURACIÓN FINAL DE PRODUCCIÓN ---
 const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024; // Límite de 30MB
-const MIN_IMAGE_SIZE_BYTES = 5 * 1024;        // Mínimo 5KB para evitar Ads/Placeholders
-const FETCH_TIMEOUT_MS = 20000; // 20 segundos para el timeout de la petición
+const MIN_IMAGE_SIZE_BYTES = 5 * 1024;        // Mínimo 5KB
+const FETCH_TIMEOUT_MS = 20000; // 20 segundos
 const MAX_IMAGE_WIDTH = 600; // Ancho máximo
-// CALIDAD FIJA SOLICITADA. El servidor siempre usará este valor.
-const WEBP_QUALITY = 5; // Calidad WEBP muy agresiva (5/100)
+const WEBP_QUALITY = 5; // Calidad fija
 
 // --- HEADERS "LLAVE MAESTRA" ---
 function getHeaders(req, domain) {
@@ -25,32 +24,34 @@ export default async function handler(req, res) {
     return res.status(204).send(null);
   }
   
-  // OBTENER LA URL: Aunque Tachiyomi envíe 'l', 'jpg', etc.,
-  // el parámetro 'url' es el único que nos interesa.
+  // Extraemos el valor del parámetro 'url'. Los parámetros 'jpg', 'l', 'bw' son ignorados 
+  // automáticamente por el simple hecho de que no los utilizamos aquí.
   const { url: rawImageUrl } = req.query;
 
   if (!rawImageUrl) {
     return res.status(400).send('Error 400: Parámetro "url" faltante.');
   }
 
-  // --- PASO CLAVE: LIMPIEZA DE URL (SOLUCIÓN A LA COMPATIBILIDAD) ---
+  // --- SOLUCIÓN MEJORADA: EXTRACCIÓN Y LIMPIEZA FORZADA DE URL ---
   let imageUrl = rawImageUrl;
   if (typeof imageUrl === 'string') {
-      // 1. Buscar la primera ocurrencia de "http" para eliminar basura inicial
-      const httpIndex = imageUrl.indexOf('http');
-      
-      if (httpIndex > 0) {
-          imageUrl = imageUrl.substring(httpIndex);
-          console.warn(`https://www.spanishdict.com/translate/saneada Se eliminaron caracteres iniciales. URL limpia: ${imageUrl.substring(0, 80)}...`);
-      }
-      // 2. Decodificar la URL
       try {
-        imageUrl = decodeURIComponent(imageUrl);
-      } catch (e) {
-        // Fallback si la decodificación falla
+          // 1. Decodificar por si hay caracteres especiales codificados
+          imageUrl = decodeURIComponent(imageUrl);
+      } catch (e) {}
+
+      // 2. Limpieza forzada: Usamos una expresión regular para encontrar la primera 
+      // ocurrencia de http(s):// y cualquier caracter que le siga, descartando lo anterior.
+      const match = imageUrl.match(/https?:\/\/.*/i);
+      if (match && match[0]) {
+          imageUrl = match[0];
+          console.warn(`https://www.spanishdict.com/translate/saneada Extracción Regex Exitosa. URL limpia: ${imageUrl.substring(0, 80)}...`);
+      } else if (imageUrl.indexOf('http') > 0) {
+          // Fallback a la limpieza simple si Regex falla
+          imageUrl = imageUrl.substring(imageUrl.indexOf('http'));
       }
   }
-  // -----------------------------------------------------------------
+  // ----------------------------------------------------------------------
 
   // Control de Aborto y Timeout (Nativo)
   const controller = new AbortController();
@@ -73,7 +74,7 @@ export default async function handler(req, res) {
 
     const response = await fetch(imageUrl, fetchOptions);
 
-    // Chequeo de estado HTTP
+    // Chequeo de estado HTTP y Validaciones de Contenido...
     if (!response.ok) {
         return redirectToOriginal(res, imageUrl, `URL no accesible (HTTP ${response.status})`);
     }
@@ -85,7 +86,6 @@ export default async function handler(req, res) {
         return redirectToOriginal(res, imageUrl, `Contenido no es imagen: ${originalContentTypeHeader || 'desconocido'}. Posiblemente un login o ad.`);
     }
 
-    // Validar que es un tipo de imagen
     if (!originalContentTypeHeader.startsWith('image/')) {
         return redirectToOriginal(res, imageUrl, 'Contenido no es un tipo de imagen válido (e.g., image/*)');
     }
@@ -103,7 +103,7 @@ export default async function handler(req, res) {
         return redirectToOriginal(res, imageUrl, `Imagen sospechosamente pequeña (${(originalSize / 1024).toFixed(2)}KB), bloqueada como posible ad/error.`);
     }
     
-    // Compresión con Sharp: USA LA CALIDAD FIJA (5)
+    // Compresión con Sharp
     const compressedBuffer = await sharp(originalBuffer)
       .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
       .trim()
@@ -125,14 +125,14 @@ export default async function handler(req, res) {
         return redirectToOriginal(res, imageUrl, 'Petición cancelada por timeout');
     }
     
-    // Para cualquier otro error (incluyendo si new URL(imageUrl) falló), activa la redirección.
+    // Si la URL limpia sigue siendo inválida, activa la redirección.
     return redirectToOriginal(res, imageUrl, `Error de procesamiento o red: ${error.message}`);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-// --- FUNCIONES HELPER ---
+// --- FUNCIONES HELPER (Sin cambios) ---
 
 function redirectToOriginal(res, imageUrl, reason) {
     console.error(`[FALLBACK INTELIGENTE ACTIVADO] para ${imageUrl}. Razón: ${reason}`);
