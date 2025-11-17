@@ -1,22 +1,16 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/compress.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["public/error.png"]
-      }
-    }
-  ],
-  "rewrites": [
-    { 
-      "source": "/api/compress", 
-      "destination": "/api/compress.js" 
-    },
-    { 
-      "source": "/(.*)", 
-      "destination": "/public/$1" 
-    }
-  ]
+  "name": "bandwidth-hero-super-ultra",
+  "version": "7.0.0",
+  "description": "Compresión de imágenes extrema, inteligente y robusta para Tachiyomi",
+  "main": "api/compress.js", // <-- Este campo causaba problemas.
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "sharp": "^0.33.4"
+  },
+  "author": "TuNombreDeUsuario",
+  "license": "MIT"
 }
