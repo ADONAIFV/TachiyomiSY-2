@@ -1,4 +1,22 @@
 {
-  "name": "bandwidth-hero-super-ultra",
-  "version": "7.0.0",
-  
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/compress.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["public/error.png"]
+      }
+    }
+  ],
+  "rewrites": [
+    { 
+      "source": "/api/compress", 
+      "destination": "/api/compress.js" 
+    },
+    { 
+      "source": "/(.*)", 
+      "destination": "/public/index.html" 
+    }
+  ]
+}
