@@ -1,5 +1,15 @@
 {
   "version": 2,
+  "rewrites": [
+    { 
+      "source": "/api/compress", 
+      "destination": "/api/compress.js" 
+    },
+    { 
+      "source": "/(.*)", 
+      "destination": "/public/$1" 
+    }
+  ],
   "builds": [
     {
       "src": "api/compress.js",
