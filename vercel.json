@@ -9,14 +9,16 @@
       }
     }
   ],
-  "rewrites": [
-    { 
-      "source": "/api/compress", 
-      "destination": "/api/compress.js" 
+  "routes": [
+    // 1. Ruta para la API
+    {
+      "src": "/api/compress",
+      "dest": "/api/compress.js"
     },
-    { 
-      "source": "/(.*)", 
-      "destination": "/public/index.html" 
+    // 2. Ruta para la página estática principal
+    {
+      "src": "/",
+      "dest": "/public/index.html"
     }
   ]
 }
