@@ -7,18 +7,20 @@
       "config": {
         "includeFiles": ["public/error.png"]
       }
+    },
+    {
+      "src": "public/index.html",
+      "use": "@vercel/static"
     }
   ],
-  "routes": [
-    // 1. Ruta para la API
-    {
-      "src": "/api/compress",
-      "dest": "/api/compress.js"
+  "rewrites": [
+    { 
+      "source": "/api/compress", 
+      "destination": "/api/compress.js" 
     },
-    // 2. Ruta para la página estática principal
-    {
-      "src": "/",
-      "dest": "/public/index.html"
+    { 
+      "source": "/(.*)", 
+      "destination": "/public/$1" 
     }
   ]
 }
