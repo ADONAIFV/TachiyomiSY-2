@@ -1,5 +1,14 @@
 {
   "version": 2,
+  "builds": [
+    {
+      "src": "api/compress.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["public/error.png"]
+      }
+    }
+  ],
   "rewrites": [
     { 
       "source": "/api/compress", 
@@ -8,15 +17,6 @@
     { 
       "source": "/(.*)", 
       "destination": "/public/$1" 
-    }
-  ],
-  "builds": [
-    {
-      "src": "api/compress.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["public/error.png"]
-      }
     }
   ]
 }
