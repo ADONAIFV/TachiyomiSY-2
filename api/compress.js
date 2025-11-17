@@ -6,7 +6,7 @@ const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024; // Límite de 30MB
 const MIN_IMAGE_SIZE_BYTES = 5 * 1024;        // Mínimo 5KB
 const FETCH_TIMEOUT_MS = 20000; // 20 segundos
 const MAX_IMAGE_WIDTH = 600; // Ancho máximo
-const WEBP_QUALITY = 5; // Calidad fija
+const WEBP_QUALITY = 5; // Calidad fija (5/100)
 
 // --- HEADERS "LLAVE MAESTRA" ---
 function getHeaders(req, domain) {
@@ -24,30 +24,29 @@ export default async function handler(req, res) {
     return res.status(204).send(null);
   }
   
-  // Extraemos el valor del parámetro 'url'. Los parámetros 'jpg', 'l', 'bw' son ignorados 
-  // automáticamente por el simple hecho de que no los utilizamos aquí.
   const { url: rawImageUrl } = req.query;
+
+  // 🚨 DIAGNÓSTICO CLAVE: Imprime la URL tal como la recibe Vercel
+  console.error(`[DIAGNÓSTICO] URL BRUTA RECIBIDA: ${rawImageUrl}`); 
 
   if (!rawImageUrl) {
     return res.status(400).send('Error 400: Parámetro "url" faltante.');
   }
 
-  // --- SOLUCIÓN MEJORADA: EXTRACCIÓN Y LIMPIEZA FORZADA DE URL ---
+  // --- SOLUCIÓN: EXTRACCIÓN Y LIMPIEZA FORZADA DE URL ---
   let imageUrl = rawImageUrl;
   if (typeof imageUrl === 'string') {
       try {
-          // 1. Decodificar por si hay caracteres especiales codificados
           imageUrl = decodeURIComponent(imageUrl);
       } catch (e) {}
 
-      // 2. Limpieza forzada: Usamos una expresión regular para encontrar la primera 
-      // ocurrencia de http(s):// y cualquier caracter que le siga, descartando lo anterior.
+      // Limpieza forzada: Usa Regex para encontrar la primera ocurrencia de http(s)://
       const match = imageUrl.match(/https?:\/\/.*/i);
       if (match && match[0]) {
           imageUrl = match[0];
           console.warn(`https://www.spanishdict.com/translate/saneada Extracción Regex Exitosa. URL limpia: ${imageUrl.substring(0, 80)}...`);
       } else if (imageUrl.indexOf('http') > 0) {
-          // Fallback a la limpieza simple si Regex falla
+          // Fallback a la limpieza simple
           imageUrl = imageUrl.substring(imageUrl.indexOf('http'));
       }
   }
@@ -60,7 +59,7 @@ export default async function handler(req, res) {
   let domain = 'https://www.google.com/';
 
   try {
-    // Intentar crear un objeto URL para validar y obtener el dominio de origen
+    // ⚠️ Esta línea puede fallar si la limpieza de la URL no fue suficiente
     const urlObject = new URL(imageUrl); 
     domain = urlObject.origin;
 
@@ -81,7 +80,7 @@ export default async function handler(req, res) {
 
     const originalContentTypeHeader = response.headers.get('content-type');
     
-    // VALIDACIÓN CRÍTICA: Bloquear HTML/JSON (Login, Captcha, Errores)
+    // VALIDACIÓN CRÍTICA: Bloquear HTML/JSON
     if (!originalContentTypeHeader || originalContentTypeHeader.includes('text/html') || originalContentTypeHeader.includes('application/json')) {
         return redirectToOriginal(res, imageUrl, `Contenido no es imagen: ${originalContentTypeHeader || 'desconocido'}. Posiblemente un login o ad.`);
     }
@@ -98,7 +97,7 @@ export default async function handler(req, res) {
         return redirectToOriginal(res, imageUrl, `Imagen demasiado grande (${(originalSize / 1024 / 1024).toFixed(2)}MB)`);
     }
 
-    // Bloqueo de imágenes sospechosamente pequeñas (Ads, Error, Placeholder)
+    // Bloqueo de imágenes sospechosamente pequeñas
     if (originalSize < MIN_IMAGE_SIZE_BYTES) {
         return redirectToOriginal(res, imageUrl, `Imagen sospechosamente pequeña (${(originalSize / 1024).toFixed(2)}KB), bloqueada como posible ad/error.`);
     }
@@ -125,14 +124,13 @@ export default async function handler(req, res) {
         return redirectToOriginal(res, imageUrl, 'Petición cancelada por timeout');
     }
     
-    // Si la URL limpia sigue siendo inválida, activa la redirección.
     return redirectToOriginal(res, imageUrl, `Error de procesamiento o red: ${error.message}`);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-// --- FUNCIONES HELPER (Sin cambios) ---
+// --- FUNCIONES HELPER ---
 
 function redirectToOriginal(res, imageUrl, reason) {
     console.error(`[FALLBACK INTELIGENTE ACTIVADO] para ${imageUrl}. Razón: ${reason}`);
