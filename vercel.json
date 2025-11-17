@@ -1,7 +1,6 @@
 {
   "name": "bandwidth-hero-super-ultra",
   "version": "7.0.0",
-  "type": "module",
   "engines": {
     "node": ">=18.0.0"
   },
