@@ -1,16 +1,5 @@
 {
   "version": 2,
-  "public": true,
-  "rewrites": [
-    { 
-      "source": "/", 
-      "destination": "/public/index.html" 
-    },
-    { 
-      "source": "/api/compress", 
-      "destination": "/api/compress.js" 
-    }
-  ],
   "builds": [
     {
       "src": "api/compress.js",
