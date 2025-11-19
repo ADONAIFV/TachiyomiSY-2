@@ -1,16 +1,17 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN MAESTRA ---
+// --- CONFIGURACIÓN DE DEFENSA EN 3 CAPAS ---
 const CONFIG = {
-    format: 'avif',
-    quality: 25,          // Calidad 25: Buen equilibrio para texto nítido
-    width: 720,           // Objetivo: 720px para descargas directas
-    effort: 2,            // Effort 2: El salvavidas de la CPU (Modo Rápido)
-    timeout: 15000,       
+    // Configuración para el RESPALDO LOCAL (Fase 3)
+    localQuality: 25,     // Tu petición: Q25
+    localWidth: 720,      // 720px
+    localEffort: 6,       // Máximo esfuerzo si llegamos a usar Vercel
+    timeout: 15000,       // Tiempo total máximo
     maxInputSize: 30 * 1024 * 1024 
 };
 
+// Headers para el modo local (Fase 3)
 const getHeaders = (targetUrl) => {
     const urlObj = new URL(targetUrl);
     return {
@@ -36,97 +37,130 @@ export default async function handler(req, res) {
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        // --- FASE 1: INTENTO DIRECTO ---
-        let response;
-        let usedProxy = false;
+        // ============================================================
+        // FASE 1: PROXY "FRANCOTIRADOR" (Especificaciones Exactas)
+        // ============================================================
+        // Pedimos: AVIF, Q25, 720px.
+        // Nota: wsrv usa chroma 4:2:0 por defecto para ahorrar, pero a Q25 se ve muy bien.
+        const workerUrl1 = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=720&output=avif&q=25`;
+        
+        let response = await fetch(workerUrl1, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: controller.signal
+        });
 
-        try {
-            response = await fetch(targetUrl, {
-                headers: getHeaders(targetUrl),
-                signal: controller.signal,
-                redirect: 'follow'
-            });
-        } catch (e) {
-            response = { ok: false, status: 500 };
+        if (response.ok) {
+            clearTimeout(timeoutId);
+            return sendProxyResponse(res, response, debug, 'Worker Tier 1 (High Spec)');
         }
 
-        // --- FASE 2: INTENTO PROXY (OPTIMIZADO) ---
-        if (!response.ok || [403, 401, 521, 404, 500].includes(response.status)) {
-            console.log(`Usando Proxy 600px para velocidad...`);
-            
-            // <--- ESTRATEGIA: PROXY A 600PX --->
-            // Pedimos 600px al proxy. Esto hace que la descarga sea rapidísima.
-            // Vercel recibe una imagen pequeña y la procesa en milisegundos.
-            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=600&output=webp`;
-            
-            response = await fetch(proxyUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' },
-                signal: controller.signal
-            });
-            usedProxy = true;
+        // ============================================================
+        // FASE 2: PROXY "SEGURO" (Reintento Simplificado)
+        // ============================================================
+        console.log(`Worker Tier 1 falló (${response.status}). Reintentando modo seguro...`);
+        
+        // Quitamos '&q=25'. Dejamos que wsrv decida la mejor compresión por defecto.
+        // A veces los servidores fallan con parámetros estrictos pero funcionan con los básicos.
+        const workerUrl2 = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=720&output=avif`;
+        
+        response = await fetch(workerUrl2, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: controller.signal
+        });
+
+        if (response.ok) {
+            clearTimeout(timeoutId);
+            return sendProxyResponse(res, response, debug, 'Worker Tier 2 (Safe Mode)');
         }
+
+        // ============================================================
+        // FASE 3: EL TANQUE (VERCEL LOCAL - Effort 6)
+        // ============================================================
+        console.log(`Worker Tier 2 falló. Activando Vercel Engine (Effort 6)...`);
+
+        // A. Descarga Directa
+        response = await fetch(targetUrl, {
+            headers: getHeaders(targetUrl),
+            signal: controller.signal,
+            redirect: 'follow'
+        });
 
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
-            return res.redirect(302, targetUrl);
-        }
+        if (!response.ok) throw new Error(`Fallo Total (Local): ${response.status}`);
 
         const originalBuffer = Buffer.from(await response.arrayBuffer());
 
-        // --- MOTOR AVIF ---
+        // B. Procesamiento Local Pesado
         const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
         const metadata = await sharpInstance.metadata();
 
-        const shouldResize = metadata.width > CONFIG.width;
-        let pipeline = sharpInstance;
+        let pipeline = sharpInstance.trim({ threshold: 10 });
 
-        pipeline = pipeline.trim({ threshold: 10 });
-
-        if (shouldResize) {
+        if (metadata.width > CONFIG.localWidth) {
             pipeline = pipeline.resize({
-                width: CONFIG.width, // 720px
-                withoutEnlargement: true, // IMPORTANTE: Si viene del proxy (600px), NO la estira a 720px.
+                width: CONFIG.localWidth,
+                withoutEnlargement: true,
                 fit: 'inside',
                 kernel: 'lanczos3'
             });
         }
 
+        // Aquí sí aplicamos Chroma 4:4:4 forzado porque tenemos el control total
         const compressedBuffer = await pipeline
             .avif({
-                quality: CONFIG.quality,      // 25
-                effort: CONFIG.effort,        // 2
-                chromaSubsampling: '4:4:4'    // Nitidez total para texto rojo
+                quality: CONFIG.localQuality, // 25
+                effort: CONFIG.localEffort,   // 6 (Máximo)
+                chromaSubsampling: '4:4:4'    // Texto Perfecto
             })
             .toBuffer();
 
         let finalBuffer = compressedBuffer;
-        let isCompressed = true;
-
         if (compressedBuffer.length >= originalBuffer.length) {
             finalBuffer = originalBuffer;
-            isCompressed = false;
         }
 
-        res.setHeader('Content-Type', isCompressed ? 'image/avif' : 'image/jpeg');
+        res.setHeader('Content-Type', 'image/avif');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('X-Original-Size', originalBuffer.length);
         res.setHeader('X-Compressed-Size', finalBuffer.length);
-        
+        res.setHeader('X-Processor', 'Vercel Local (Tier 3)');
+
         if (debug === 'true') {
             return res.json({
-                input: originalBuffer.length,
-                output: finalBuffer.length,
+                source: 'Vercel Local',
+                originalSize: originalBuffer.length,
+                compressedSize: finalBuffer.length,
                 savings: `${(100 - (finalBuffer.length / originalBuffer.length * 100)).toFixed(2)}%`,
-                method: usedProxy ? 'Proxy (600px Pre-fetch)' : 'Direct (720px Target)',
-                settings: 'AVIF Q25 | Chroma 4:4:4 | Effort 2'
+                settings: 'AVIF Q25 | Effort 6 | Chroma 4:4:4'
             });
         }
 
         return res.send(finalBuffer);
 
     } catch (error) {
-        console.error('SysErr:', error.message);
+        console.error('Fatal Error:', error.message);
         if (!res.headersSent) return res.redirect(302, targetUrl);
     }
+}
+
+// Función auxiliar para enviar respuestas del Proxy
+async function sendProxyResponse(res, response, debug, sourceName) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.setHeader('Content-Type', 'image/avif');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-Original-Size', 'Delegated'); 
+    res.setHeader('X-Compressed-Size', buffer.length);
+    res.setHeader('X-Processor', sourceName);
+
+    if (debug === 'true') {
+        return res.json({
+            source: sourceName,
+            status: 'Success',
+            size: buffer.length,
+            format: 'avif',
+            cpuUsage: '0%'
+        });
+    }
+    return res.send(buffer);
 }
