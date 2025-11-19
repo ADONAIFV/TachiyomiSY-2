@@ -1,23 +1,30 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN MAESTRA (CALIBRACIÓN DE ALTA FIDELIDAD) ---
+// --- CONFIGURACIÓN OPTIMIZADA ---
 const CONFIG = {
-    quality: 25,          // Aumentado de 5 a 25 (Elimina el efecto "borroso")
-    width: 720,           // Aumentado a 720px (Mejor definición en HD)
-    format: 'avif',
-    effort: 6,            // Mantenemos esfuerzo alto para compactar bien
-    timeout: 20000,       // 20 segundos (Damos un poco más de margen)
+    format: 'webp',
+    quality: 50,          // Calidad final de usuario (Equilibrio peso/calidad)
+    width: 720,           
+    effort: 4,            
+    timeout: 15000,       
     maxInputSize: 30 * 1024 * 1024 
+};
+
+const getHeaders = (targetUrl) => {
+    const urlObj = new URL(targetUrl);
+    return {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+        'Referer': urlObj.origin, 
+    };
 };
 
 export default async function handler(req, res) {
     const { url: rawUrl, debug } = req.query;
 
-    // 1. Validación
     if (!rawUrl) return res.status(400).json({ error: 'Falta ?url=' });
 
-    // 2. Limpieza de URL
     let targetUrl = rawUrl;
     if (typeof targetUrl === 'string') {
         try { targetUrl = decodeURIComponent(targetUrl); } catch (e) {}
@@ -25,45 +32,50 @@ export default async function handler(req, res) {
         if (match && match[0]) targetUrl = match[0];
     }
 
-    const startTime = Date.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        // 3. Fetch "Camaleón"
-        const response = await fetch(targetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-                'Referer': new URL(targetUrl).origin 
-            },
+        // --- INTENTO 1: ACCESO DIRECTO ---
+        let response = await fetch(targetUrl, {
+            headers: getHeaders(targetUrl),
             signal: controller.signal,
             redirect: 'follow'
         });
 
+        // --- INTENTO 2: PROXY DE RELEVO (Optimizado) ---
+        if (response.status === 403 || response.status === 401) {
+            console.log(`Bloqueo detectado (${response.status}). Activando Relevo WSRV...`);
+            
+            // CAMBIO TÁCTICO: Pedimos WebP a calidad 85.
+            // Es visualmente idéntico al original para propósitos de edición,
+            // pero se transfiere mucho más rápido que un PNG.
+            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&output=webp&q=85`;
+            
+            response = await fetch(proxyUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                signal: controller.signal
+            });
+        }
+
         clearTimeout(timeoutId);
 
-        if (!response.ok) throw new Error(`Origen: ${response.status}`);
-        
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.startsWith('image/')) throw new Error('No es imagen.');
+        if (!response.ok) throw new Error(`Fallo definitivo: ${response.status}`);
 
         const originalBuffer = Buffer.from(await response.arrayBuffer());
         const originalSize = originalBuffer.length;
 
-        if (originalSize > CONFIG.maxInputSize) throw new Error('Imagen muy grande.');
+        if (originalSize > CONFIG.maxInputSize) throw new Error('Imagen demasiado grande.');
 
-        // 4. MOTOR GRÁFICO 2.0 (Optimizado para Calidad/Peso)
+        // --- MOTOR DE COMPRESIÓN ---
         const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
         const metadata = await sharpInstance.metadata();
 
         const shouldResize = metadata.width > CONFIG.width;
         let pipeline = sharpInstance;
 
-        // A. Trim inteligente
         pipeline = pipeline.trim({ threshold: 10 });
 
-        // B. Resize Lanczos3 (Nitidez)
         if (shouldResize) {
             pipeline = pipeline.resize({
                 width: CONFIG.width,
@@ -73,26 +85,23 @@ export default async function handler(req, res) {
             });
         }
 
-        // C. Compresión AVIF 4:4:4 (El secreto de la nitidez en texto)
         const compressedBuffer = await pipeline
-            .avif({
-                quality: CONFIG.quality,
-                effort: CONFIG.effort,
-                chromaSubsampling: '4:4:4' // <--- CAMBIO CRÍTICO: Texto nítido, colores perfectos
+            .webp({
+                quality: CONFIG.quality, // 50 (Tu estándar)
+                effort: CONFIG.effort,   // 4
+                smartSubsample: true,
+                minSize: true
             })
             .toBuffer();
 
-        // 5. Lógica de decisión
         let finalBuffer = compressedBuffer;
         let isCompressed = true;
-
         if (compressedBuffer.length >= originalSize) {
             finalBuffer = originalBuffer;
             isCompressed = false;
         }
 
-        // 6. Respuesta
-        res.setHeader('Content-Type', isCompressed ? 'image/avif' : contentType);
+        res.setHeader('Content-Type', 'image/webp');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('X-Original-Size', originalSize);
         res.setHeader('X-Compressed-Size', finalBuffer.length);
@@ -102,8 +111,8 @@ export default async function handler(req, res) {
                 originalSize,
                 compressedSize: finalBuffer.length,
                 savings: `${(100 - (finalBuffer.length / originalSize * 100)).toFixed(2)}%`,
-                format: isCompressed ? 'avif' : 'original',
-                settings: 'Quality 25 | Width 720 | Chroma 4:4:4'
+                method: response.url.includes('wsrv.nl') ? 'Proxy Relay (WebP q85 Transport)' : 'Direct Fetch',
+                format: 'webp'
             });
         }
 
@@ -112,6 +121,5 @@ export default async function handler(req, res) {
     } catch (error) {
         console.error('Err:', error.message);
         if (!res.headersSent) return res.redirect(302, targetUrl);
-        res.status(500).send('Error');
     }
-}
+            } 
