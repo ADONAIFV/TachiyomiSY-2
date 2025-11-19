@@ -1,154 +1,124 @@
+javascript
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN FINAL DE PRODUCCIÓN ---
-const MAX_INPUT_SIZE_BYTES = 30 * 1024 * 1024; // Límite de 30MB
-const MIN_IMAGE_SIZE_BYTES = 5 * 1024;        // Mínimo 5KB
-const FETCH_TIMEOUT_MS = 20000; // 20 segundos
-const MAX_IMAGE_WIDTH = 600; // Ancho máximo
-const WEBP_QUALITY = 5; // Calidad fija (5/100)
-
-// --- HEADERS "LLAVE MAESTRA" ---
-function getHeaders(req, domain) {
-  return {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
-    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-    'Referer': domain || 'https://www.google.com/',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
-  };
-}
+// --- CONFIGURACIÓN MAESTRA (MANHUA EDITION) ---
+const CONFIG = {
+    quality: 5,           // Calidad extrema (AVIF soporta esto bien)
+    width: 600,           // Ancho fijo para móviles
+    format: 'avif',       // El formato más eficiente actual
+    effort: 6,            // (1-9) Mayor esfuerzo CPU = mejor calidad visual con poco peso
+    timeout: 15000,       // 15 segundos máximo
+    maxInputSize: 30 * 1024 * 1024 // 30MB límite
+};
 
 export default async function handler(req, res) {
-  if (req.url.includes('favicon')) {
-    return res.status(204).send(null);
-  }
-  
-  const { url: rawImageUrl } = req.query;
+    const { url: rawUrl, debug } = req.query;
 
-  // 🚨 DIAGNÓSTICO CLAVE: Imprime la URL tal como la recibe Vercel
-  console.error(`[DIAGNÓSTICO] URL BRUTA RECIBIDA: ${rawImageUrl}`); 
-
-  if (!rawImageUrl) {
-    return res.status(400).send('Error 400: Parámetro "url" faltante.');
-  }
-
-  // --- SOLUCIÓN: EXTRACCIÓN Y LIMPIEZA FORZADA DE URL ---
-  let imageUrl = rawImageUrl;
-  if (typeof imageUrl === 'string') {
-      try {
-          imageUrl = decodeURIComponent(imageUrl);
-      } catch (e) {}
-
-      // Limpieza forzada: Usa Regex para encontrar la primera ocurrencia de http(s)://
-      const match = imageUrl.match(/https?:\/\/.*/i);
-      if (match && match[0]) {
-          imageUrl = match[0];
-          console.warn(`https://www.spanishdict.com/translate/saneada Extracción Regex Exitosa. URL limpia: ${imageUrl.substring(0, 80)}...`);
-      } else if (imageUrl.indexOf('http') > 0) {
-          // Fallback a la limpieza simple
-          imageUrl = imageUrl.substring(imageUrl.indexOf('http'));
-      }
-  }
-  // ----------------------------------------------------------------------
-
-  // Control de Aborto y Timeout (Nativo)
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  
-  let domain = 'https://www.google.com/';
-
-  try {
-    // ⚠️ Esta línea puede fallar si la limpieza de la URL no fue suficiente
-    const urlObject = new URL(imageUrl); 
-    domain = urlObject.origin;
-
-    // Obtener cabeceras y realizar la petición
-    const headers = getHeaders(req, domain);
-    const fetchOptions = {
-        method: 'GET',
-        headers: headers,
-        signal: controller.signal,
-        redirect: 'follow' // <--- ¡AÑADIDO! Esto fuerza a 'node-fetch' a seguir el 302.
-    };
-
-    const response = await fetch(imageUrl, fetchOptions);
-
-    // Chequeo de estado HTTP y Validaciones de Contenido...
-    if (!response.ok) {
-        return redirectToOriginal(res, imageUrl, `URL no accesible (HTTP ${response.status})`);
+    // 1. Validación básica
+    if (!rawUrl) {
+        return res.status(400).json({ error: 'Falta el parámetro ?url=' });
     }
 
-    const originalContentTypeHeader = response.headers.get('content-type');
-    
-    // VALIDACIÓN CRÍTICA: Bloquear HTML/JSON
-    if (!originalContentTypeHeader || originalContentTypeHeader.includes('text/html') || originalContentTypeHeader.includes('application/json')) {
-        return redirectToOriginal(res, imageUrl, `Contenido no es imagen: ${originalContentTypeHeader || 'desconocido'}. Posiblemente un login o ad.`);
+    // 2. Limpieza de URL (Tu lógica original preservada)
+    let targetUrl = rawUrl;
+    if (typeof targetUrl === 'string') {
+        try { targetUrl = decodeURIComponent(targetUrl); } catch (e) {}
+        // Regex para encontrar la primera ocurrencia real de http/https
+        const match = targetUrl.match(/https?:\/\/.*/i);
+        if (match && match[0]) targetUrl = match[0];
     }
 
-    if (!originalContentTypeHeader.startsWith('image/')) {
-        return redirectToOriginal(res, imageUrl, 'Contenido no es un tipo de imagen válido (e.g., image/*)');
+    const startTime = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
+
+    try {
+        // 3. Modo Camaleón: Headers para engañar a Cloudflare
+        const response = await fetch(targetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Referer': new URL(targetUrl).origin 
+            },
+            signal: controller.signal,
+            redirect: 'follow'
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) throw new Error(`Origen respondió ${response.status}`);
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.startsWith('image/')) {
+            throw new Error('La URL no es una imagen válida.');
+        }
+
+        const originalBuffer = Buffer.from(await response.arrayBuffer());
+        const originalSize = originalBuffer.length;
+
+        if (originalSize > CONFIG.maxInputSize) throw new Error('Imagen demasiado grande.');
+
+        // 4. EL MOTOR GRÁFICO (Aquí ocurre la magia)
+        const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
+        const metadata = await sharpInstance.metadata();
+
+        const shouldResize = metadata.width > CONFIG.width;
+        let pipeline = sharpInstance;
+
+        // A. Recorte de bordes inútiles (Auto-Trim)
+        pipeline = pipeline.trim({ threshold: 10 });
+
+        // B. Redimensionado Inteligente (Lanczos3 para texto nítido)
+        if (shouldResize) {
+            pipeline = pipeline.resize({
+                width: CONFIG.width,
+                withoutEnlargement: true,
+                fit: 'inside',
+                kernel: 'lanczos3' // Crucial para leer texto pequeño en 600px
+            });
+        }
+
+        // C. Compresión AVIF Agresiva
+        const compressedBuffer = await pipeline
+            .avif({
+                quality: CONFIG.quality,
+                effort: CONFIG.effort,
+                chromaSubsampling: '4:2:0' 
+            })
+            .toBuffer();
+
+        // 5. Garantía "No Empeorar"
+        // Si el original era más ligero (raro, pero posible), usamos el original
+        let finalBuffer = compressedBuffer;
+        let isCompressed = true;
+
+        if (compressedBuffer.length >= originalSize) {
+            finalBuffer = originalBuffer;
+            isCompressed = false;
+        }
+
+        // 6. Enviar Respuesta
+        res.setHeader('Content-Type', isCompressed ? 'image/avif' : contentType);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('X-Original-Size', originalSize);
+        res.setHeader('X-Compressed-Size', finalBuffer.length);
+        
+        if (debug === 'true') {
+            return res.json({
+                originalSize,
+                compressedSize: finalBuffer.length,
+                savings: `${(100 - (finalBuffer.length / originalSize * 100)).toFixed(2)}%`,
+                format: isCompressed ? 'avif' : 'original'
+            });
+        }
+
+        return res.send(finalBuffer);
+
+    } catch (error) {
+        console.error('Error:', error.message);
+        // Fallback: Redirigir a la imagen original si fallamos
+        if (!res.headersSent) return res.redirect(302, targetUrl);
+        res.status(500).send('Error processing image');
     }
-
-    // Carga de la imagen en memoria y chequeo de tamaño
-    const originalBuffer = await response.buffer();
-    const originalSize = originalBuffer.length;
-
-    if (originalSize > MAX_INPUT_SIZE_BYTES) {
-        return redirectToOriginal(res, imageUrl, `Imagen demasiado grande (${(originalSize / 1024 / 1024).toFixed(2)}MB)`);
-    }
-
-    // Bloqueo de imágenes sospechosamente pequeñas
-    if (originalSize < MIN_IMAGE_SIZE_BYTES) {
-        return redirectToOriginal(res, imageUrl, `Imagen sospechosamente pequeña (${(originalSize / 1024).toFixed(2)}KB), bloqueada como posible ad/error.`);
-    }
-    
-    // Compresión con Sharp
-    const compressedBuffer = await sharp(originalBuffer)
-      .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
-      .trim()
-      .webp({ quality: WEBP_QUALITY, effort: 6 }) 
-      .toBuffer();
-    
-    const compressedSize = compressedBuffer.length;
-
-    // Validación de Ahorro y Envío
-    if (compressedSize < originalSize) {
-      return sendCompressed(res, compressedBuffer, originalSize, compressedSize);
-    } else {
-      return sendOriginal(res, originalBuffer, originalContentTypeHeader);
-    }
-    
-  } catch (error) {
-    // Manejo de errores de Abort, Sharp, o URL inválida
-    if (error.name === 'AbortError') {
-        return redirectToOriginal(res, imageUrl, 'Petición cancelada por timeout');
-    }
-    
-    return redirectToOriginal(res, imageUrl, `Error de procesamiento o red: ${error.message}`);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-// --- FUNCIONES HELPER ---
-
-function redirectToOriginal(res, imageUrl, reason) {
-    console.error(`[FALLBACK INTELIGENTE ACTIVADO] para ${imageUrl}. Razón: ${reason}`);
-    res.setHeader('Location', imageUrl);
-    res.status(302).end(); 
-}
-
-function sendCompressed(res, buffer, originalSize, compressedSize) {
-  res.setHeader('Cache-Control', 's-maxage=31536000, stale-while-revalidate'); 
-  res.setHeader('Content-Type', 'image/webp');
-  res.setHeader('X-Original-Size', originalSize);
-  res.setHeader('X-Compressed-Size', compressedSize);
-  res.send(buffer);
-}
-
-function sendOriginal(res, buffer, contentType) {
-  res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate'); 
-  res.setHeader('Content-Type', contentType);
-  res.send(buffer);
-}
+} 
