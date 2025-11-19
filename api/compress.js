@@ -1,12 +1,12 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: Q10 + 720PX (TEXTO LEGIBLE / BAJO CPU) ---
+// --- CONFIGURACIÓN MAESTRA ---
 const CONFIG = {
     format: 'avif',
-    quality: 10,          // Calidad muy baja (necesaria para compensar los 720px)
-    width: 720,           // 720px: Mayor definición para leer letras pequeñas/rojas
-    effort: 2,            // Modo Turbo
+    quality: 25,          // Calidad 25: Buen equilibrio para texto nítido
+    width: 720,           // Objetivo: 720px para descargas directas
+    effort: 2,            // Effort 2: El salvavidas de la CPU (Modo Rápido)
     timeout: 15000,       
     maxInputSize: 30 * 1024 * 1024 
 };
@@ -50,15 +50,14 @@ export default async function handler(req, res) {
             response = { ok: false, status: 500 };
         }
 
-        // --- FASE 2: INTENTO PROXY (OPTIMIZADO PARA CPU) ---
+        // --- FASE 2: INTENTO PROXY (OPTIMIZADO) ---
         if (!response.ok || [403, 401, 521, 404, 500].includes(response.status)) {
-            console.log(`Activando Proxy Optimizado...`);
+            console.log(`Usando Proxy 600px para velocidad...`);
             
-            // <--- LA CLAVE DE LOS 7 SEGUNDOS A 1 SEGUNDO --->
-            // Le pedimos al proxy que nos de la imagen YA redimensionada a 720px.
-            // output=webp: Formato ligero para que viaje rápido a Vercel.
-            // Vercel recibe un archivo pequeño y ya no tiene que redimensionar, solo convertir.
-            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.width}&output=webp`;
+            // <--- ESTRATEGIA: PROXY A 600PX --->
+            // Pedimos 600px al proxy. Esto hace que la descarga sea rapidísima.
+            // Vercel recibe una imagen pequeña y la procesa en milisegundos.
+            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=600&output=webp`;
             
             response = await fetch(proxyUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -79,18 +78,15 @@ export default async function handler(req, res) {
         const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
         const metadata = await sharpInstance.metadata();
 
-        // Nota: Si viene del proxy, shouldResize será false (porque ya es 720px),
-        // saltándose el paso de cálculo pesado de resize.
         const shouldResize = metadata.width > CONFIG.width;
         let pipeline = sharpInstance;
 
-        // Trim suave (Threshold 10 es seguro)
         pipeline = pipeline.trim({ threshold: 10 });
 
         if (shouldResize) {
             pipeline = pipeline.resize({
-                width: CONFIG.width,
-                withoutEnlargement: true,
+                width: CONFIG.width, // 720px
+                withoutEnlargement: true, // IMPORTANTE: Si viene del proxy (600px), NO la estira a 720px.
                 fit: 'inside',
                 kernel: 'lanczos3'
             });
@@ -98,9 +94,9 @@ export default async function handler(req, res) {
 
         const compressedBuffer = await pipeline
             .avif({
-                quality: CONFIG.quality,      // 10
+                quality: CONFIG.quality,      // 25
                 effort: CONFIG.effort,        // 2
-                chromaSubsampling: '4:4:4'    // CRUCIAL: Mantiene las letras rojas legibles a Q10
+                chromaSubsampling: '4:4:4'    // Nitidez total para texto rojo
             })
             .toBuffer();
 
@@ -112,7 +108,7 @@ export default async function handler(req, res) {
             isCompressed = false;
         }
 
-        res.setHeader('Content-Type', 'image/avif');
+        res.setHeader('Content-Type', isCompressed ? 'image/avif' : 'image/jpeg');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('X-Original-Size', originalBuffer.length);
         res.setHeader('X-Compressed-Size', finalBuffer.length);
@@ -122,8 +118,8 @@ export default async function handler(req, res) {
                 input: originalBuffer.length,
                 output: finalBuffer.length,
                 savings: `${(100 - (finalBuffer.length / originalBuffer.length * 100)).toFixed(2)}%`,
-                method: usedProxy ? 'Proxy (Pre-resized)' : 'Direct',
-                settings: 'AVIF Q10 | Width 720 | Chroma 4:4:4'
+                method: usedProxy ? 'Proxy (600px Pre-fetch)' : 'Direct (720px Target)',
+                settings: 'AVIF Q25 | Chroma 4:4:4 | Effort 2'
             });
         }
 
