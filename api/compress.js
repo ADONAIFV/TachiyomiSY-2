@@ -1,13 +1,13 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: OBJETIVO 20-50 KB ---
+// --- CONFIGURACIÓN: TEXTO NÍTIDO / FONDO COMPRIMIDO ---
 const CONFIG = {
     format: 'webp',
-    quality: 40,          // Bajamos a 40 (Punto dulce para WebP en Manhua)
-    width: 640,           // 640px es el estándar móvil perfecto (ahorra 20% vs 720px)
-    effort: 4,            
-    timeout: 15000,       
+    quality: 20,          // Bajamos a 20: Compresión agresiva para los fondos
+    width: 600,           // Ancho contenido para móviles
+    effort: 4,            // Balance CPU/Compresión
+    timeout: 12000,       
     maxInputSize: 30 * 1024 * 1024 
 };
 
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        // --- INTENTO 1: DIRECTO ---
+        // --- FASE 1: DIRECTO ---
         let response;
         let usedProxy = false;
 
@@ -46,21 +46,16 @@ export default async function handler(req, res) {
                 signal: controller.signal,
                 redirect: 'follow'
             });
-        } catch (fetchError) {
-            // Si falla la conexión directa (DNS, 521, timeout), marcamos para usar proxy
-            console.log(`Fallo directo (${fetchError.message}). Probando Proxy...`);
-            response = { ok: false, status: 500 }; // Forzamos el fallo
+        } catch (e) {
+            response = { ok: false, status: 500 };
         }
 
-        // --- INTENTO 2: PROXY INTELLIGENTE (Si falló el directo o hay bloqueo 403/401/521) ---
-        if (!response.ok || response.status === 403 || response.status === 401 || response.status === 521) {
-            console.log(`Activando Relevo WSRV (Causa: ${response.status || 'Error Red'})...`);
+        // --- FASE 2: PROXY (Solo si falla directo) ---
+        if (!response.ok || [403, 401, 521, 404, 500].includes(response.status)) {
+            console.log(`Fallo directo (${response.status}). Activando Proxy Raw...`);
             
-            // TRUCO MAESTRO: Pedimos al proxy que YA nos dé la imagen redimensionada.
-            // &w=640: El proxy hace el trabajo duro de redimensionar.
-            // &q=60: Pedimos calidad media para que la descarga sea rápida.
-            // &output=webp: Descargamos un archivo ligero.
-            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.width}&output=webp&q=60`;
+            // Pedimos la imagen "cruda" al proxy para evitar errores 404 de validación
+            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}`;
             
             response = await fetch(proxyUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -71,23 +66,23 @@ export default async function handler(req, res) {
 
         clearTimeout(timeoutId);
 
-        if (!response.ok) throw new Error(`Fallo definitivo: ${response.status}`);
+        // --- FASE 3: FALLBACK FINAL ---
+        if (!response.ok) {
+            // Si todo falla, redirigimos al original para no cortar la lectura
+            return res.redirect(302, targetUrl);
+        }
 
         const originalBuffer = Buffer.from(await response.arrayBuffer());
-        
+
         // --- MOTOR DE COMPRESIÓN ---
         const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
         const metadata = await sharpInstance.metadata();
 
-        // Si venimos del proxy, la imagen YA viene en 640px (o menos),
-        // así que Sharp tiene que trabajar muy poco. ¡Ahorro masivo de CPU!
         const shouldResize = metadata.width > CONFIG.width;
         let pipeline = sharpInstance;
 
-        // Solo hacemos trim si NO usamos el proxy (el proxy a veces corta mal si hacemos trim sobre trim)
-        // O si prefieres siempre trim, déjalo, pero consume CPU. 
-        // Lo dejamos activado para asegurar bordes limpios.
-        pipeline = pipeline.trim({ threshold: 10 });
+        // Trim estándar
+        pipeline = pipeline.trim({ threshold: 12 });
 
         if (shouldResize) {
             pipeline = pipeline.resize({
@@ -100,16 +95,16 @@ export default async function handler(req, res) {
 
         const compressedBuffer = await pipeline
             .webp({
-                quality: CONFIG.quality, // 40
+                quality: CONFIG.quality, // 20
                 effort: CONFIG.effort,   // 4
-                smartSubsample: true,    // Vital para leer texto a calidad 40
+                smartSubsample: true,    // ACTIVADO: El texto rojo/azul se verá perfecto
                 minSize: true
             })
             .toBuffer();
 
-        // Lógica de seguridad: Si comprimir aumentó el tamaño (raro), usa el original
         let finalBuffer = compressedBuffer;
         let isCompressed = true;
+        
         if (compressedBuffer.length >= originalBuffer.length) {
             finalBuffer = originalBuffer;
             isCompressed = false;
@@ -122,19 +117,18 @@ export default async function handler(req, res) {
         
         if (debug === 'true') {
             return res.json({
-                inputSize: originalBuffer.length,
-                finalSize: finalBuffer.length,
+                input: originalBuffer.length,
+                output: finalBuffer.length,
                 savings: `${(100 - (finalBuffer.length / originalBuffer.length * 100)).toFixed(2)}%`,
-                source: usedProxy ? 'Proxy (Pre-optimized)' : 'Direct',
-                settings: 'WebP Q40 | Width 640'
+                method: usedProxy ? 'Proxy' : 'Direct',
+                settings: 'WebP Q20 | SmartSubsample: ON'
             });
         }
 
         return res.send(finalBuffer);
 
     } catch (error) {
-        console.error('Err:', error.message);
-        // Redirección final de emergencia
+        console.error('SysErr:', error.message);
         if (!res.headersSent) return res.redirect(302, targetUrl);
     }
 }
