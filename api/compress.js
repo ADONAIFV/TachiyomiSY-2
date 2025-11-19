@@ -1,12 +1,12 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: CALIDAD ORO + BAJO CONSUMO ---
+// --- CONFIGURACIÓN: Q10 + 720PX (TEXTO LEGIBLE / BAJO CPU) ---
 const CONFIG = {
-    format: 'avif',       
-    quality: 25,          // Restaurado: Tu calidad ideal
-    width: 600,           // 600px para compensar el bajo esfuerzo y mantener <50KB
-    effort: 2,            // <--- EL SALVAVIDAS: Rápido y bajo consumo de CPU
+    format: 'avif',
+    quality: 10,          // Calidad muy baja (necesaria para compensar los 720px)
+    width: 720,           // 720px: Mayor definición para leer letras pequeñas/rojas
+    effort: 2,            // Modo Turbo
     timeout: 15000,       
     maxInputSize: 30 * 1024 * 1024 
 };
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        // --- FASE 1: DIRECTO ---
+        // --- FASE 1: INTENTO DIRECTO ---
         let response;
         let usedProxy = false;
 
@@ -50,10 +50,16 @@ export default async function handler(req, res) {
             response = { ok: false, status: 500 };
         }
 
-        // --- FASE 2: PROXY (Solo si es necesario) ---
+        // --- FASE 2: INTENTO PROXY (OPTIMIZADO PARA CPU) ---
         if (!response.ok || [403, 401, 521, 404, 500].includes(response.status)) {
-            console.log(`Bloqueo (${response.status}). Activando Proxy...`);
-            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}`;
+            console.log(`Activando Proxy Optimizado...`);
+            
+            // <--- LA CLAVE DE LOS 7 SEGUNDOS A 1 SEGUNDO --->
+            // Le pedimos al proxy que nos de la imagen YA redimensionada a 720px.
+            // output=webp: Formato ligero para que viaje rápido a Vercel.
+            // Vercel recibe un archivo pequeño y ya no tiene que redimensionar, solo convertir.
+            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.width}&output=webp`;
+            
             response = await fetch(proxyUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0' },
                 signal: controller.signal
@@ -69,14 +75,17 @@ export default async function handler(req, res) {
 
         const originalBuffer = Buffer.from(await response.arrayBuffer());
 
-        // --- MOTOR AVIF HÍBRIDO ---
+        // --- MOTOR AVIF ---
         const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
         const metadata = await sharpInstance.metadata();
 
+        // Nota: Si viene del proxy, shouldResize será false (porque ya es 720px),
+        // saltándose el paso de cálculo pesado de resize.
         const shouldResize = metadata.width > CONFIG.width;
         let pipeline = sharpInstance;
 
-        pipeline = pipeline.trim({ threshold: 12 });
+        // Trim suave (Threshold 10 es seguro)
+        pipeline = pipeline.trim({ threshold: 10 });
 
         if (shouldResize) {
             pipeline = pipeline.resize({
@@ -89,9 +98,9 @@ export default async function handler(req, res) {
 
         const compressedBuffer = await pipeline
             .avif({
-                quality: CONFIG.quality,      // 25 (La que te gustó)
-                effort: CONFIG.effort,        // 2 (Para salvar tu cuenta Vercel)
-                chromaSubsampling: '4:4:4'    // 4:4:4 (Restaurado: Texto nítido, colores perfectos)
+                quality: CONFIG.quality,      // 10
+                effort: CONFIG.effort,        // 2
+                chromaSubsampling: '4:4:4'    // CRUCIAL: Mantiene las letras rojas legibles a Q10
             })
             .toBuffer();
 
@@ -103,7 +112,7 @@ export default async function handler(req, res) {
             isCompressed = false;
         }
 
-        res.setHeader('Content-Type', isCompressed ? 'image/avif' : 'image/jpeg');
+        res.setHeader('Content-Type', 'image/avif');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('X-Original-Size', originalBuffer.length);
         res.setHeader('X-Compressed-Size', finalBuffer.length);
@@ -113,7 +122,8 @@ export default async function handler(req, res) {
                 input: originalBuffer.length,
                 output: finalBuffer.length,
                 savings: `${(100 - (finalBuffer.length / originalBuffer.length * 100)).toFixed(2)}%`,
-                settings: 'AVIF Q25 | Chroma 4:4:4 | Effort 2'
+                method: usedProxy ? 'Proxy (Pre-resized)' : 'Direct',
+                settings: 'AVIF Q10 | Width 720 | Chroma 4:4:4'
             });
         }
 
