@@ -1,11 +1,11 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN OPTIMIZADA ---
+// --- CONFIGURACIÓN: OBJETIVO 20-50 KB ---
 const CONFIG = {
     format: 'webp',
-    quality: 50,          // Calidad final de usuario (Equilibrio peso/calidad)
-    width: 720,           
+    quality: 40,          // Bajamos a 40 (Punto dulce para WebP en Manhua)
+    width: 640,           // 640px es el estándar móvil perfecto (ahorra 20% vs 720px)
     effort: 4,            
     timeout: 15000,       
     maxInputSize: 30 * 1024 * 1024 
@@ -36,26 +36,37 @@ export default async function handler(req, res) {
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        // --- INTENTO 1: ACCESO DIRECTO ---
-        let response = await fetch(targetUrl, {
-            headers: getHeaders(targetUrl),
-            signal: controller.signal,
-            redirect: 'follow'
-        });
+        // --- INTENTO 1: DIRECTO ---
+        let response;
+        let usedProxy = false;
 
-        // --- INTENTO 2: PROXY DE RELEVO (Optimizado) ---
-        if (response.status === 403 || response.status === 401) {
-            console.log(`Bloqueo detectado (${response.status}). Activando Relevo WSRV...`);
+        try {
+            response = await fetch(targetUrl, {
+                headers: getHeaders(targetUrl),
+                signal: controller.signal,
+                redirect: 'follow'
+            });
+        } catch (fetchError) {
+            // Si falla la conexión directa (DNS, 521, timeout), marcamos para usar proxy
+            console.log(`Fallo directo (${fetchError.message}). Probando Proxy...`);
+            response = { ok: false, status: 500 }; // Forzamos el fallo
+        }
+
+        // --- INTENTO 2: PROXY INTELLIGENTE (Si falló el directo o hay bloqueo 403/401/521) ---
+        if (!response.ok || response.status === 403 || response.status === 401 || response.status === 521) {
+            console.log(`Activando Relevo WSRV (Causa: ${response.status || 'Error Red'})...`);
             
-            // CAMBIO TÁCTICO: Pedimos WebP a calidad 85.
-            // Es visualmente idéntico al original para propósitos de edición,
-            // pero se transfiere mucho más rápido que un PNG.
-            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&output=webp&q=85`;
+            // TRUCO MAESTRO: Pedimos al proxy que YA nos dé la imagen redimensionada.
+            // &w=640: El proxy hace el trabajo duro de redimensionar.
+            // &q=60: Pedimos calidad media para que la descarga sea rápida.
+            // &output=webp: Descargamos un archivo ligero.
+            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.width}&output=webp&q=60`;
             
             response = await fetch(proxyUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0' },
                 signal: controller.signal
             });
+            usedProxy = true;
         }
 
         clearTimeout(timeoutId);
@@ -63,17 +74,19 @@ export default async function handler(req, res) {
         if (!response.ok) throw new Error(`Fallo definitivo: ${response.status}`);
 
         const originalBuffer = Buffer.from(await response.arrayBuffer());
-        const originalSize = originalBuffer.length;
-
-        if (originalSize > CONFIG.maxInputSize) throw new Error('Imagen demasiado grande.');
-
+        
         // --- MOTOR DE COMPRESIÓN ---
         const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
         const metadata = await sharpInstance.metadata();
 
+        // Si venimos del proxy, la imagen YA viene en 640px (o menos),
+        // así que Sharp tiene que trabajar muy poco. ¡Ahorro masivo de CPU!
         const shouldResize = metadata.width > CONFIG.width;
         let pipeline = sharpInstance;
 
+        // Solo hacemos trim si NO usamos el proxy (el proxy a veces corta mal si hacemos trim sobre trim)
+        // O si prefieres siempre trim, déjalo, pero consume CPU. 
+        // Lo dejamos activado para asegurar bordes limpios.
         pipeline = pipeline.trim({ threshold: 10 });
 
         if (shouldResize) {
@@ -87,32 +100,33 @@ export default async function handler(req, res) {
 
         const compressedBuffer = await pipeline
             .webp({
-                quality: CONFIG.quality, // 50 (Tu estándar)
+                quality: CONFIG.quality, // 40
                 effort: CONFIG.effort,   // 4
-                smartSubsample: true,
+                smartSubsample: true,    // Vital para leer texto a calidad 40
                 minSize: true
             })
             .toBuffer();
 
+        // Lógica de seguridad: Si comprimir aumentó el tamaño (raro), usa el original
         let finalBuffer = compressedBuffer;
         let isCompressed = true;
-        if (compressedBuffer.length >= originalSize) {
+        if (compressedBuffer.length >= originalBuffer.length) {
             finalBuffer = originalBuffer;
             isCompressed = false;
         }
 
         res.setHeader('Content-Type', 'image/webp');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('X-Original-Size', originalSize);
+        res.setHeader('X-Original-Size', originalBuffer.length);
         res.setHeader('X-Compressed-Size', finalBuffer.length);
         
         if (debug === 'true') {
             return res.json({
-                originalSize,
-                compressedSize: finalBuffer.length,
-                savings: `${(100 - (finalBuffer.length / originalSize * 100)).toFixed(2)}%`,
-                method: response.url.includes('wsrv.nl') ? 'Proxy Relay (WebP q85 Transport)' : 'Direct Fetch',
-                format: 'webp'
+                inputSize: originalBuffer.length,
+                finalSize: finalBuffer.length,
+                savings: `${(100 - (finalBuffer.length / originalBuffer.length * 100)).toFixed(2)}%`,
+                source: usedProxy ? 'Proxy (Pre-optimized)' : 'Direct',
+                settings: 'WebP Q40 | Width 640'
             });
         }
 
@@ -120,6 +134,7 @@ export default async function handler(req, res) {
 
     } catch (error) {
         console.error('Err:', error.message);
+        // Redirección final de emergencia
         if (!res.headersSent) return res.redirect(302, targetUrl);
     }
-            } 
+}
