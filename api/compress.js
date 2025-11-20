@@ -1,26 +1,31 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN ---
+// --- CONFIGURACIÓN: NO HAY EXCUSAS ---
 const CONFIG = {
-    // Lo que pedimos a los proxies
-    targetWidth: 720,
-    targetQuality: 25,
+    finalFormat: 'avif',
+    finalQuality: 25,
+    finalWidth: 720,
     
-    // Lo que hace Vercel SI Y SOLO SI fallan los proxies
-    localFormat: 'avif',
-    localEffort: 4, 
+    // Bajamos Effort a 3 para asegurar que Vercel logre terminar 
+    // el trabajo antes del timeout, pero mantenemos la calidad.
+    localEffort: 3,       
     
-    timeout: 14000,
+    timeout: 25000, // Aumentamos tiempo para asegurar que termine
     maxInputSize: 30 * 1024 * 1024 
 };
 
+// HEADERS ROBUSTOS (Para evitar bloqueos de Mangacrab/Leercapitulo)
 const getHeaders = (targetUrl) => {
     try {
         const urlObj = new URL(targetUrl);
         return {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-            'Referer': urlObj.origin, 
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': urlObj.origin, // Truco: Referer es el mismo sitio
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site'
         };
     } catch (e) { return {}; }
 };
@@ -42,117 +47,115 @@ export default async function handler(req, res) {
 
     try {
         // ============================================================
-        // FASE 1: OBREROS EXTERNOS (Gasto CPU = 0%)
+        // FASE 1: INTENTO DE PROXIES (Passthrough)
         // ============================================================
-        // Intentamos obtener la imagen procesada externamente.
-        // Si llega ALGO (AVIF, WebP, lo que sea), lo enviamos directo.
+        // Intentamos obtener AVIF o WebP procesado externamente.
         
-        // 1.1 WSRV.NL (Prioridad 1)
+        // 1. WSRV.NL (Pedimos AVIF Q25)
         try {
-            const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.targetWidth}&output=avif&q=${CONFIG.targetQuality}`;
-            const response = await fetch(wsrvUrl, { signal: controller.signal });
-            
-            if (response.ok) {
-                const buffer = Buffer.from(await response.arrayBuffer());
-                if (buffer.length > 100) {
+            const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.finalWidth}&output=avif&q=${CONFIG.finalQuality}`;
+            const resWsrv = await fetch(wsrvUrl, { signal: controller.signal });
+            if (resWsrv.ok) {
+                const buffer = Buffer.from(await resWsrv.arrayBuffer());
+                if (buffer.length > 500) { // Validación mínima
                     clearTimeout(timeoutId);
-                    // ¡DETENTE! No proceses nada. Envía lo que llegó.
-                    // Si wsrv mandó WebP en vez de AVIF, lo aceptamos.
-                    const contentType = response.headers.get('content-type') || 'image/avif';
-                    return sendPassthrough(res, buffer, contentType, 'wsrv.nl', debug);
+                    return sendPassthrough(res, buffer, 'image/avif', 'wsrv.nl', debug);
                 }
             }
         } catch (e) {}
 
-        // 1.2 STATICALLY (Prioridad 2)
+        // 2. WSRV.NL FALLBACK (Pedimos WebP Q50 - Más compatible)
         try {
-            const cleanUrl = targetUrl.replace(/^https?:\/\//, '');
-            const staticUrl = `https://cdn.statically.io/img/${cleanUrl}?w=${CONFIG.targetWidth}&f=avif&q=${CONFIG.targetQuality}`;
-            const response = await fetch(staticUrl, { signal: controller.signal });
-
-            if (response.ok) {
-                const buffer = Buffer.from(await response.arrayBuffer());
-                if (buffer.length > 100) {
+            const wsrvUrl2 = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.finalWidth}&output=webp&q=50`;
+            const resWsrv2 = await fetch(wsrvUrl2, { signal: controller.signal });
+            if (resWsrv2.ok) {
+                const buffer = Buffer.from(await resWsrv2.arrayBuffer());
+                if (buffer.length > 500) {
                     clearTimeout(timeoutId);
-                    const contentType = response.headers.get('content-type') || 'image/avif';
-                    return sendPassthrough(res, buffer, contentType, 'statically', debug);
+                    return sendPassthrough(res, buffer, 'image/webp', 'wsrv.nl (WebP)', debug);
                 }
             }
         } catch (e) {}
 
         // ============================================================
-        // FASE 2: VERCEL LOCAL (Último Recurso - Gasto CPU Alto)
+        // FASE 2: VERCEL LOCAL (FORZADO)
         // ============================================================
-        // Solo llegamos aquí si wsrv y statically fallaron (bloqueo o error).
-        // Aquí sí encendemos Sharp.
-        
-        console.log('Proxies fallaron. Activando procesamiento local...');
+        // Si llegamos aquí, los proxies fallaron. Vercel DEBE procesar.
+        console.log('Proxies fallaron. Iniciando procesamiento local FORZADO...');
 
-        const responseDirect = await fetch(targetUrl, {
+        const resDirect = await fetch(targetUrl, {
             headers: getHeaders(targetUrl),
             signal: controller.signal,
             redirect: 'follow'
         });
 
-        if (!responseDirect.ok) throw new Error(`Origen inaccesible: ${responseDirect.status}`);
+        if (!resDirect.ok) {
+            throw new Error(`Origen bloqueado: ${resDirect.status}`);
+        }
         
-        const originalBuffer = Buffer.from(await responseDirect.arrayBuffer());
+        const originalBuffer = Buffer.from(await resDirect.arrayBuffer());
         
-        // Procesamiento Local
-        const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
+        // CONFIGURACIÓN SHARP "A PRUEBA DE FALLOS"
+        const sharpInstance = sharp(originalBuffer, { 
+            animated: true, 
+            limitInputPixels: false,
+            failOnError: false // IMPORTANTE: Si la imagen tiene un error pequeño, la procesa igual
+        });
+
         const metadata = await sharpInstance.metadata();
+        let pipeline = sharpInstance;
 
-        let pipeline = sharpInstance.trim({ threshold: 10 });
+        // 1. Siempre hacemos Trim (si funciona)
+        try { pipeline = pipeline.trim({ threshold: 10 }); } catch (e) {}
 
-        if (metadata.width > CONFIG.targetWidth) {
+        // 2. Redimensionado OBLIGATORIO
+        // Incluso si la imagen es pequeña, aseguramos el ancho para estandarizar.
+        if (metadata.width > CONFIG.finalWidth) {
             pipeline = pipeline.resize({
-                width: CONFIG.targetWidth,
+                width: CONFIG.finalWidth, // 720px
                 withoutEnlargement: true,
                 fit: 'inside',
                 kernel: 'lanczos3'
             });
         }
 
+        // 3. Conversión a AVIF OBLIGATORIA
+        // Eliminamos la comprobación de tamaño. Enviamos el AVIF procesado SIEMPRE.
         const compressedBuffer = await pipeline
             .avif({
-                quality: CONFIG.targetQuality, // 25
-                effort: CONFIG.localEffort,    // 4
-                chromaSubsampling: '4:4:4'
+                quality: CONFIG.finalQuality, // 25
+                effort: CONFIG.localEffort,   // 3 (Suficiente para calidad, rápido para no timeout)
+                chromaSubsampling: '4:4:4'    // Texto nítido
             })
             .toBuffer();
 
         clearTimeout(timeoutId);
 
-        // Safety Check
-        let finalBuffer = compressedBuffer;
-        if (compressedBuffer.length >= originalBuffer.length) {
-            finalBuffer = originalBuffer;
-        }
-
         res.setHeader('Content-Type', 'image/avif');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('X-Compressed-Size', finalBuffer.length);
-        res.setHeader('X-Processor', 'Vercel Local (Fallback)');
+        res.setHeader('X-Original-Size', originalBuffer.length);
+        res.setHeader('X-Compressed-Size', compressedBuffer.length);
+        res.setHeader('X-Processor', 'Vercel Local (Forced)');
 
         if (debug === 'true') {
             return res.json({
-                source: 'Vercel Local',
                 status: 'Processed Locally',
-                size: finalBuffer.length
+                source: 'Direct Fetch',
+                inputSize: originalBuffer.length,
+                outputSize: compressedBuffer.length,
+                note: 'Resize and Compression Enforced'
             });
         }
 
-        return res.send(finalBuffer);
+        return res.send(compressedBuffer);
 
     } catch (error) {
-        // ============================================================
-        // FASE 3: REDIRECT FINAL
-        // ============================================================
+        console.error(`Error Fatal: ${error.message}`);
+        // Solo si realmente explota todo (Timeout, Error 500 real), redirigimos.
         if (!res.headersSent) return res.redirect(302, targetUrl);
     }
 }
 
-// Función de "Passthrough" (Cero CPU)
 function sendPassthrough(res, buffer, contentType, source, debug) {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -162,11 +165,9 @@ function sendPassthrough(res, buffer, contentType, source, debug) {
     if (debug === 'true') {
         return res.json({
             source: source,
-            status: 'Direct Relay (No CPU used)',
-            format: contentType,
+            status: 'Direct Relay',
             size: buffer.length
         });
     }
-    
     return res.send(buffer);
-            } 
+} 
