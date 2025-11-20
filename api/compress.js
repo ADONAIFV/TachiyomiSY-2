@@ -1,14 +1,14 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: PROTOCOLO HIDRA (CALIDAD 15 / LÍMITE 60KB) ---
+// --- CONFIGURACIÓN: PROTOCOLO HIDRA (CALIDAD 30 / LÍMITE 60KB) ---
 const CONFIG = {
     // Límite de la "Báscula": 60 KB
     maxSizeBytes: 60 * 1024, 
     
-    // Configuración de Vercel (Modo Flash Ajustado)
+    // Configuración de Vercel (Modo Flash Alta Fidelidad)
     localFormat: 'avif',
-    localQuality: 15,     // Q15: Balance entre detalle y peso
+    localQuality: 30,     // Q30: Mayor detalle, bordes más suaves
     localEffort: 0,       // Effort 0: Velocidad máxima
     chroma: '4:4:4',      // Texto nítido
     
@@ -74,15 +74,16 @@ export default async function handler(req, res) {
             
             const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
             
-            // Compresión AVIF (Q15 + Effort 0)
+            // Compresión AVIF (Q30 + Effort 0)
             const compressedBuffer = await sharpInstance
                 .avif({
-                    quality: CONFIG.localQuality, // 15
+                    quality: CONFIG.localQuality, // 30
                     effort: CONFIG.localEffort,   // 0
                     chromaSubsampling: CONFIG.chroma
                 })
                 .toBuffer();
 
+            // Solo aplicamos si realmente bajó el peso
             if (compressedBuffer.length < inputSize) {
                 finalBuffer = compressedBuffer;
                 finalFormat = 'image/avif';
