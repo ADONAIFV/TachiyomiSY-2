@@ -1,15 +1,14 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: PROTOCOLO HIDRA (LÍMITE ESTRICTO 60KB) ---
+// --- CONFIGURACIÓN: PROTOCOLO HIDRA (CALIDAD 15 / LÍMITE 60KB) ---
 const CONFIG = {
     // Límite de la "Báscula": 60 KB
-    // Si la imagen del proxy pesa más de esto, Vercel la comprime.
     maxSizeBytes: 60 * 1024, 
     
-    // Configuración de Vercel (Modo Flash)
+    // Configuración de Vercel (Modo Flash Ajustado)
     localFormat: 'avif',
-    localQuality: 5,      // Q5: Lo mínimo legible
+    localQuality: 15,     // Q15: Balance entre detalle y peso
     localEffort: 0,       // Effort 0: Velocidad máxima
     chroma: '4:4:4',      // Texto nítido
     
@@ -75,16 +74,15 @@ export default async function handler(req, res) {
             
             const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
             
-            // Compresión AVIF Extrema (Q5 + Effort 0)
+            // Compresión AVIF (Q15 + Effort 0)
             const compressedBuffer = await sharpInstance
                 .avif({
-                    quality: CONFIG.localQuality, // 5
+                    quality: CONFIG.localQuality, // 15
                     effort: CONFIG.localEffort,   // 0
                     chromaSubsampling: CONFIG.chroma
                 })
                 .toBuffer();
 
-            // Solo aplicamos si realmente bajó el peso
             if (compressedBuffer.length < inputSize) {
                 finalBuffer = compressedBuffer;
                 finalFormat = 'image/avif';
@@ -109,7 +107,7 @@ export default async function handler(req, res) {
                 input_size: inputSize,
                 output_size: finalBuffer.length,
                 limit_60kb: inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED',
-                processor: processor
+                quality_used: CONFIG.localQuality
             });
         }
 
