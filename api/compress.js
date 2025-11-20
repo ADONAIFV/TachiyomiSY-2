@@ -1,20 +1,20 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN MAESTRA ---
+// --- CONFIGURACIÓN ---
 const CONFIG = {
-    // Lo que queremos al final
-    finalFormat: 'avif',
-    finalQuality: 25,
-    finalWidth: 720,
-    finalEffort: 4, 
-    chroma: '4:4:4',
+    // Lo que pedimos a los proxies
+    targetWidth: 720,
+    targetQuality: 25,
     
-    timeout: 15000,
+    // Lo que hace Vercel SI Y SOLO SI fallan los proxies
+    localFormat: 'avif',
+    localEffort: 4, 
+    
+    timeout: 14000,
     maxInputSize: 30 * 1024 * 1024 
 };
 
-// Headers estándar
 const getHeaders = (targetUrl) => {
     try {
         const urlObj = new URL(targetUrl);
@@ -41,145 +41,103 @@ export default async function handler(req, res) {
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        let inputBuffer;
-        let inputMime = '';
-        let sourceUsed = '';
-        let requiresProcessing = true; // Por defecto, asumimos que Vercel tendrá que trabajar
-
         // ============================================================
-        // OBRERO 1: WSRV.NL (El más fiable)
+        // FASE 1: OBREROS EXTERNOS (Gasto CPU = 0%)
         // ============================================================
-        // Intentamos que ÉL nos de el AVIF Q25 directamente.
-        // Si lo logra, Vercel no gasta CPU.
+        // Intentamos obtener la imagen procesada externamente.
+        // Si llega ALGO (AVIF, WebP, lo que sea), lo enviamos directo.
+        
+        // 1.1 WSRV.NL (Prioridad 1)
         try {
-            const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=720&output=avif&q=25`;
-            const resWsrv = await fetch(wsrvUrl, { signal: controller.signal });
+            const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.targetWidth}&output=avif&q=${CONFIG.targetQuality}`;
+            const response = await fetch(wsrvUrl, { signal: controller.signal });
             
-            if (resWsrv.ok) {
-                const buffer = Buffer.from(await resWsrv.arrayBuffer());
+            if (response.ok) {
+                const buffer = Buffer.from(await response.arrayBuffer());
                 if (buffer.length > 100) {
-                    inputBuffer = buffer;
-                    inputMime = resWsrv.headers.get('content-type') || '';
-                    sourceUsed = 'wsrv.nl';
-                    
-                    // EL GRAN TRUCO: Si ya es AVIF, no hacemos nada más.
-                    if (inputMime.includes('avif')) {
-                        requiresProcessing = false; 
-                    }
+                    clearTimeout(timeoutId);
+                    // ¡DETENTE! No proceses nada. Envía lo que llegó.
+                    // Si wsrv mandó WebP en vez de AVIF, lo aceptamos.
+                    const contentType = response.headers.get('content-type') || 'image/avif';
+                    return sendPassthrough(res, buffer, contentType, 'wsrv.nl', debug);
                 }
             }
-        } catch (e) { console.log('Wsrv falló, probando siguiente...'); }
+        } catch (e) {}
 
-        // ============================================================
-        // OBRERO 2: STATICALLY (El refuerzo gratuito)
-        // ============================================================
-        // Si wsrv falló, probamos Statically.
-        if (!inputBuffer) {
-            try {
-                // Statically usa estructura /img/URL
-                // Quitamos el protocolo https:// de la url objetivo para Statically
-                const cleanUrl = targetUrl.replace(/^https?:\/\//, '');
-                const staticallyUrl = `https://cdn.statically.io/img/${cleanUrl}?w=720&f=avif&q=25`;
-                
-                const resStatic = await fetch(staticallyUrl, { signal: controller.signal });
+        // 1.2 STATICALLY (Prioridad 2)
+        try {
+            const cleanUrl = targetUrl.replace(/^https?:\/\//, '');
+            const staticUrl = `https://cdn.statically.io/img/${cleanUrl}?w=${CONFIG.targetWidth}&f=avif&q=${CONFIG.targetQuality}`;
+            const response = await fetch(staticUrl, { signal: controller.signal });
 
-                if (resStatic.ok) {
-                    const buffer = Buffer.from(await resStatic.arrayBuffer());
-                    if (buffer.length > 100) {
-                        inputBuffer = buffer;
-                        inputMime = resStatic.headers.get('content-type') || '';
-                        sourceUsed = 'statically.io';
-                        
-                        if (inputMime.includes('avif')) {
-                            requiresProcessing = false;
-                        }
-                    }
+            if (response.ok) {
+                const buffer = Buffer.from(await response.arrayBuffer());
+                if (buffer.length > 100) {
+                    clearTimeout(timeoutId);
+                    const contentType = response.headers.get('content-type') || 'image/avif';
+                    return sendPassthrough(res, buffer, contentType, 'statically', debug);
                 }
-            } catch (e) { console.log('Statically falló, probando directo...'); }
-        }
+            }
+        } catch (e) {}
 
         // ============================================================
-        // OBRERO 3: DESCARGA DIRECTA (Último recurso)
+        // FASE 2: VERCEL LOCAL (Último Recurso - Gasto CPU Alto)
         // ============================================================
-        if (!inputBuffer) {
-            const resDirect = await fetch(targetUrl, {
-                headers: getHeaders(targetUrl),
-                signal: controller.signal,
-                redirect: 'follow'
+        // Solo llegamos aquí si wsrv y statically fallaron (bloqueo o error).
+        // Aquí sí encendemos Sharp.
+        
+        console.log('Proxies fallaron. Activando procesamiento local...');
+
+        const responseDirect = await fetch(targetUrl, {
+            headers: getHeaders(targetUrl),
+            signal: controller.signal,
+            redirect: 'follow'
+        });
+
+        if (!responseDirect.ok) throw new Error(`Origen inaccesible: ${responseDirect.status}`);
+        
+        const originalBuffer = Buffer.from(await responseDirect.arrayBuffer());
+        
+        // Procesamiento Local
+        const sharpInstance = sharp(originalBuffer, { animated: true, limitInputPixels: false });
+        const metadata = await sharpInstance.metadata();
+
+        let pipeline = sharpInstance.trim({ threshold: 10 });
+
+        if (metadata.width > CONFIG.targetWidth) {
+            pipeline = pipeline.resize({
+                width: CONFIG.targetWidth,
+                withoutEnlargement: true,
+                fit: 'inside',
+                kernel: 'lanczos3'
             });
-            
-            if (!resDirect.ok) throw new Error(`Origen inaccesible: ${resDirect.status}`);
-            
-            inputBuffer = Buffer.from(await resDirect.arrayBuffer());
-            inputMime = resDirect.headers.get('content-type');
-            sourceUsed = 'Direct Origin';
-            requiresProcessing = true; // Aquí SIEMPRE procesamos
         }
+
+        const compressedBuffer = await pipeline
+            .avif({
+                quality: CONFIG.targetQuality, // 25
+                effort: CONFIG.localEffort,    // 4
+                chromaSubsampling: '4:4:4'
+            })
+            .toBuffer();
 
         clearTimeout(timeoutId);
 
-        // ============================================================
-        // FASE DE DECISIÓN DE VERCEL
-        // ============================================================
-        
-        let finalBuffer;
-
-        if (!requiresProcessing) {
-            // CAMINO RÁPIDO (FAST LANE): 0% CPU
-            // El obrero ya nos dio un AVIF. Lo enviamos tal cual.
-            console.log(`Passthrough activado para ${sourceUsed}`);
-            finalBuffer = inputBuffer;
-        } else {
-            // CAMINO LENTO (PROCESS LANE): Usamos CPU
-            // Recibimos WebP, JPEG o PNG. Vercel tiene que convertirlo a AVIF.
-            console.log(`Procesando imagen desde ${sourceUsed}...`);
-            
-            const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
-            const metadata = await sharpInstance.metadata();
-            
-            let pipeline = sharpInstance;
-
-            // Solo hacemos trim si viene directo (los proxys a veces cortan mal)
-            if (sourceUsed === 'Direct Origin') {
-                pipeline = pipeline.trim({ threshold: 10 });
-            }
-
-            // Resize si es necesario (Si viene de proxy, ya es 720px)
-            if (metadata.width > CONFIG.finalWidth) {
-                pipeline = pipeline.resize({
-                    width: CONFIG.finalWidth,
-                    withoutEnlargement: true,
-                    fit: 'inside',
-                    kernel: 'lanczos3'
-                });
-            }
-
-            // Tu configuración sagrada
-            finalBuffer = await pipeline
-                .avif({
-                    quality: CONFIG.finalQuality, // 25
-                    effort: CONFIG.finalEffort,   // 4
-                    chromaSubsampling: CONFIG.chroma
-                })
-                .toBuffer();
+        // Safety Check
+        let finalBuffer = compressedBuffer;
+        if (compressedBuffer.length >= originalBuffer.length) {
+            finalBuffer = originalBuffer;
         }
 
-        // Verificación final de tamaño (Safety check)
-        if (finalBuffer.length >= inputBuffer.length && requiresProcessing) {
-            finalBuffer = inputBuffer; // Si optimizar salió mal, enviamos lo que llegó
-        }
-
-        // Responder
         res.setHeader('Content-Type', 'image/avif');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('X-Compressed-Size', finalBuffer.length);
-        res.setHeader('X-Processor', requiresProcessing ? `Vercel (Convert from ${sourceUsed})` : `Vercel (Passthrough ${sourceUsed})`);
+        res.setHeader('X-Processor', 'Vercel Local (Fallback)');
 
         if (debug === 'true') {
             return res.json({
-                status: 'Success',
-                source: sourceUsed,
-                mode: requiresProcessing ? 'CPU Heavy (Conversion)' : 'CPU Zero (Passthrough)',
+                source: 'Vercel Local',
+                status: 'Processed Locally',
                 size: finalBuffer.length
             });
         }
@@ -187,7 +145,28 @@ export default async function handler(req, res) {
         return res.send(finalBuffer);
 
     } catch (error) {
-        console.error(`Error Fatal: ${error.message}`);
+        // ============================================================
+        // FASE 3: REDIRECT FINAL
+        // ============================================================
         if (!res.headersSent) return res.redirect(302, targetUrl);
     }
 }
+
+// Función de "Passthrough" (Cero CPU)
+function sendPassthrough(res, buffer, contentType, source, debug) {
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-Compressed-Size', buffer.length);
+    res.setHeader('X-Processor', `${source} (Passthrough)`);
+
+    if (debug === 'true') {
+        return res.json({
+            source: source,
+            status: 'Direct Relay (No CPU used)',
+            format: contentType,
+            size: buffer.length
+        });
+    }
+    
+    return res.send(buffer);
+            } 
