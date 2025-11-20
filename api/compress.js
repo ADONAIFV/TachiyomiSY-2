@@ -1,30 +1,28 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN FINAL: CALIDAD HÍBRIDA ---
+// --- CONFIGURACIÓN MAESTRA ---
 const CONFIG = {
-    // Configuración de SALIDA (Lo que recibe Tachiyomi)
+    // Lo que queremos al final
     finalFormat: 'avif',
-    finalQuality: 25,     // Q25 AVIF
-    finalWidth: 720,      // 720px
-    finalEffort: 4,       // Effort 4 (Balanceado)
-    chroma: '4:4:4',      // Texto Nítido
-
-    // Configuración del OBRERO (wsrv.nl)
-    // Le pedimos WebP de baja calidad para que la transferencia sea instantánea
-    proxyQuality: 50,     
+    finalQuality: 25,
+    finalWidth: 720,
+    finalEffort: 4, 
+    chroma: '4:4:4',
     
-    timeout: 15000,       
+    timeout: 15000,
     maxInputSize: 30 * 1024 * 1024 
 };
 
+// Headers estándar
 const getHeaders = (targetUrl) => {
-    const urlObj = new URL(targetUrl);
-    return {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        'Referer': urlObj.origin, 
-    };
+    try {
+        const urlObj = new URL(targetUrl);
+        return {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+            'Referer': urlObj.origin, 
+        };
+    } catch (e) { return {}; }
 };
 
 export default async function handler(req, res) {
@@ -44,127 +42,152 @@ export default async function handler(req, res) {
 
     try {
         let inputBuffer;
-        let usedProxy = false;
+        let inputMime = '';
+        let sourceUsed = '';
+        let requiresProcessing = true; // Por defecto, asumimos que Vercel tendrá que trabajar
 
         // ============================================================
-        // PASO 1: INTENTO HÍBRIDO (Delegar a wsrv.nl)
+        // OBRERO 1: WSRV.NL (El más fiable)
         // ============================================================
-        // Le pedimos al proxy:
-        // 1. WebP (Su especialidad)
-        // 2. 720px (Para que Vercel no tenga que redimensionar)
-        // 3. Q50 (Para que llegue rápido a Vercel)
-        const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.finalWidth}&output=webp&q=${CONFIG.proxyQuality}`;
-
+        // Intentamos que ÉL nos de el AVIF Q25 directamente.
+        // Si lo logra, Vercel no gasta CPU.
         try {
-            const proxyResponse = await fetch(proxyUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' },
-                signal: controller.signal
-            });
-
-            if (proxyResponse.ok) {
-                const buffer = Buffer.from(await proxyResponse.arrayBuffer());
-                // Validación: Asegurar que recibimos una imagen válida
+            const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=720&output=avif&q=25`;
+            const resWsrv = await fetch(wsrvUrl, { signal: controller.signal });
+            
+            if (resWsrv.ok) {
+                const buffer = Buffer.from(await resWsrv.arrayBuffer());
                 if (buffer.length > 100) {
                     inputBuffer = buffer;
-                    usedProxy = true;
-                    // ¡ÉXITO! Tenemos una imagen de 720px lista para convertir.
+                    inputMime = resWsrv.headers.get('content-type') || '';
+                    sourceUsed = 'wsrv.nl';
+                    
+                    // EL GRAN TRUCO: Si ya es AVIF, no hacemos nada más.
+                    if (inputMime.includes('avif')) {
+                        requiresProcessing = false; 
+                    }
                 }
             }
-        } catch (e) {
-            console.log('Proxy falló o tardó demasiado. Pasando a descarga directa...');
+        } catch (e) { console.log('Wsrv falló, probando siguiente...'); }
+
+        // ============================================================
+        // OBRERO 2: STATICALLY (El refuerzo gratuito)
+        // ============================================================
+        // Si wsrv falló, probamos Statically.
+        if (!inputBuffer) {
+            try {
+                // Statically usa estructura /img/URL
+                // Quitamos el protocolo https:// de la url objetivo para Statically
+                const cleanUrl = targetUrl.replace(/^https?:\/\//, '');
+                const staticallyUrl = `https://cdn.statically.io/img/${cleanUrl}?w=720&f=avif&q=25`;
+                
+                const resStatic = await fetch(staticallyUrl, { signal: controller.signal });
+
+                if (resStatic.ok) {
+                    const buffer = Buffer.from(await resStatic.arrayBuffer());
+                    if (buffer.length > 100) {
+                        inputBuffer = buffer;
+                        inputMime = resStatic.headers.get('content-type') || '';
+                        sourceUsed = 'statically.io';
+                        
+                        if (inputMime.includes('avif')) {
+                            requiresProcessing = false;
+                        }
+                    }
+                }
+            } catch (e) { console.log('Statically falló, probando directo...'); }
         }
 
         // ============================================================
-        // PASO 2: INTENTO DIRECTO (Si el Proxy falló)
+        // OBRERO 3: DESCARGA DIRECTA (Último recurso)
         // ============================================================
-        // Si wsrv.nl está bloqueado (403/404), Vercel tiene que bajar la original.
         if (!inputBuffer) {
-            const directResponse = await fetch(targetUrl, {
+            const resDirect = await fetch(targetUrl, {
                 headers: getHeaders(targetUrl),
                 signal: controller.signal,
                 redirect: 'follow'
             });
-
-            if (!directResponse.ok) {
-                // Si falla el proxy Y falla el directo, no hay nada que hacer.
-                // Lanzamos error para activar la redirección final.
-                throw new Error(`Origen inaccesible: ${directResponse.status}`);
-            }
-
-            inputBuffer = Buffer.from(await directResponse.arrayBuffer());
+            
+            if (!resDirect.ok) throw new Error(`Origen inaccesible: ${resDirect.status}`);
+            
+            inputBuffer = Buffer.from(await resDirect.arrayBuffer());
+            inputMime = resDirect.headers.get('content-type');
+            sourceUsed = 'Direct Origin';
+            requiresProcessing = true; // Aquí SIEMPRE procesamos
         }
-
-        // ============================================================
-        // PASO 3: EL TOQUE FINAL (Vercel Engine)
-        // ============================================================
-        // Aquí ocurre la magia. Convertimos lo que tengamos a AVIF Q25.
-        
-        const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
-        const metadata = await sharpInstance.metadata();
-
-        let pipeline = sharpInstance;
-
-        // Solo aplicamos Trim si venimos directo (el proxy a veces corta de más)
-        if (!usedProxy) {
-            pipeline = pipeline.trim({ threshold: 10 });
-        }
-
-        // Lógica de Redimensionado Inteligente:
-        // Si venimos del Proxy, la imagen YA es 720px. Sharp detectará esto
-        // y se saltará el paso de resize, ahorrando MUCHA CPU.
-        if (metadata.width > CONFIG.finalWidth) {
-            pipeline = pipeline.resize({
-                width: CONFIG.finalWidth,
-                withoutEnlargement: true,
-                fit: 'inside',
-                kernel: 'lanczos3'
-            });
-        }
-
-        // Conversión final a AVIF
-        const compressedBuffer = await pipeline
-            .avif({
-                quality: CONFIG.finalQuality, // 25
-                effort: CONFIG.finalEffort,   // 4
-                chromaSubsampling: CONFIG.chroma // 4:4:4
-            })
-            .toBuffer();
 
         clearTimeout(timeoutId);
 
-        // Si por alguna razón el resultado es más grande que lo que recibimos (raro),
-        // enviamos lo que recibimos (sea el WebP del proxy o el original).
-        let finalBuffer = compressedBuffer;
-        let finalFormat = 'image/avif';
+        // ============================================================
+        // FASE DE DECISIÓN DE VERCEL
+        // ============================================================
         
-        if (compressedBuffer.length >= inputBuffer.length) {
+        let finalBuffer;
+
+        if (!requiresProcessing) {
+            // CAMINO RÁPIDO (FAST LANE): 0% CPU
+            // El obrero ya nos dio un AVIF. Lo enviamos tal cual.
+            console.log(`Passthrough activado para ${sourceUsed}`);
             finalBuffer = inputBuffer;
-            finalFormat = usedProxy ? 'image/webp' : 'image/jpeg';
+        } else {
+            // CAMINO LENTO (PROCESS LANE): Usamos CPU
+            // Recibimos WebP, JPEG o PNG. Vercel tiene que convertirlo a AVIF.
+            console.log(`Procesando imagen desde ${sourceUsed}...`);
+            
+            const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
+            const metadata = await sharpInstance.metadata();
+            
+            let pipeline = sharpInstance;
+
+            // Solo hacemos trim si viene directo (los proxys a veces cortan mal)
+            if (sourceUsed === 'Direct Origin') {
+                pipeline = pipeline.trim({ threshold: 10 });
+            }
+
+            // Resize si es necesario (Si viene de proxy, ya es 720px)
+            if (metadata.width > CONFIG.finalWidth) {
+                pipeline = pipeline.resize({
+                    width: CONFIG.finalWidth,
+                    withoutEnlargement: true,
+                    fit: 'inside',
+                    kernel: 'lanczos3'
+                });
+            }
+
+            // Tu configuración sagrada
+            finalBuffer = await pipeline
+                .avif({
+                    quality: CONFIG.finalQuality, // 25
+                    effort: CONFIG.finalEffort,   // 4
+                    chromaSubsampling: CONFIG.chroma
+                })
+                .toBuffer();
         }
 
-        res.setHeader('Content-Type', finalFormat);
+        // Verificación final de tamaño (Safety check)
+        if (finalBuffer.length >= inputBuffer.length && requiresProcessing) {
+            finalBuffer = inputBuffer; // Si optimizar salió mal, enviamos lo que llegó
+        }
+
+        // Responder
+        res.setHeader('Content-Type', 'image/avif');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('X-Compressed-Size', finalBuffer.length);
-        res.setHeader('X-Source', usedProxy ? 'Hybrid (wsrv+Vercel)' : 'Direct (Vercel)');
+        res.setHeader('X-Processor', requiresProcessing ? `Vercel (Convert from ${sourceUsed})` : `Vercel (Passthrough ${sourceUsed})`);
 
         if (debug === 'true') {
             return res.json({
                 status: 'Success',
-                source: usedProxy ? 'Hybrid (Proxy Pre-processing)' : 'Direct Fetch',
-                inputSize: inputBuffer.length,
-                outputSize: finalBuffer.length,
-                format: finalFormat
+                source: sourceUsed,
+                mode: requiresProcessing ? 'CPU Heavy (Conversion)' : 'CPU Zero (Passthrough)',
+                size: finalBuffer.length
             });
         }
 
         return res.send(finalBuffer);
 
     } catch (error) {
-        // ============================================================
-        // RED DE SEGURIDAD FINAL (REDIRECT)
-        // ============================================================
-        // Si todo falla, redirigimos a la imagen original.
-        console.error(`Fatal Error: ${error.message}`);
+        console.error(`Error Fatal: ${error.message}`);
         if (!res.headersSent) return res.redirect(302, targetUrl);
     }
 }
