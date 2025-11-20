@@ -1,33 +1,16 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: NO HAY EXCUSAS ---
+// --- CONFIGURACIÓN MAESTRA: PARALLEL RACING ---
 const CONFIG = {
-    finalFormat: 'avif',
-    finalQuality: 25,
-    finalWidth: 720,
+    maxSizeBytes: 100 * 1024, // 100 KB (Regla de Oro)
     
-    // Bajamos Effort a 3 para asegurar que Vercel logre terminar 
-    // el trabajo antes del timeout, pero mantenemos la calidad.
-    localEffort: 3,       
+    // Configuración Local (Plan Z)
+    localQuality: 25,
+    localEffort: 3,
+    chroma: '4:4:4',
     
-    timeout: 25000, // Aumentamos tiempo para asegurar que termine
-    maxInputSize: 30 * 1024 * 1024 
-};
-
-// HEADERS ROBUSTOS (Para evitar bloqueos de Mangacrab/Leercapitulo)
-const getHeaders = (targetUrl) => {
-    try {
-        const urlObj = new URL(targetUrl);
-        return {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-            'Referer': urlObj.origin, // Truco: Referer es el mismo sitio
-            'Sec-Fetch-Dest': 'image',
-            'Sec-Fetch-Mode': 'no-cors',
-            'Sec-Fetch-Site': 'cross-site'
-        };
-    } catch (e) { return {}; }
+    timeout: 20000,
 };
 
 export default async function handler(req, res) {
@@ -35,6 +18,7 @@ export default async function handler(req, res) {
 
     if (!rawUrl) return res.status(400).json({ error: 'Falta ?url=' });
 
+    // 1. Saneamiento
     let targetUrl = rawUrl;
     if (typeof targetUrl === 'string') {
         try { targetUrl = decodeURIComponent(targetUrl); } catch (e) {}
@@ -47,127 +31,152 @@ export default async function handler(req, res) {
 
     try {
         // ============================================================
-        // FASE 1: INTENTO DE PROXIES (Passthrough)
+        // PASO 0: PREPARAR LA FUENTE (PHOTON)
         // ============================================================
-        // Intentamos obtener AVIF o WebP procesado externamente.
+        // Todos los obreros comerán de Photon para ser rápidos.
+        const cleanUrl = targetUrl.replace(/^https?:\/\//, '');
+        const photonUrl = `https://i0.wp.com/${cleanUrl}?w=720&strip=all`;
+
+        // ============================================================
+        // PASO 1: LA GRAN CARRERA (PROMISE.ANY)
+        // ============================================================
+        // Definimos a los corredores.
         
-        // 1. WSRV.NL (Pedimos AVIF Q25)
+        const racerStatically = fetchWorker(
+            `https://cdn.statically.io/img/${cleanUrl}?w=720&f=avif&q=25`, 
+            'Statically', controller.signal
+        );
+
+        const racerWsrv = fetchWorker(
+            `https://wsrv.nl/?url=${encodeURIComponent(photonUrl)}&output=avif&q=25`, 
+            'wsrv.nl', controller.signal
+        );
+
+        const racerWeserv = fetchWorker(
+            `https://images.weserv.nl/?url=${encodeURIComponent(photonUrl)}&output=avif&q=25`, 
+            'weserv.nl', controller.signal
+        );
+
+        const racerImageCDN = fetchWorker(
+            `https://imagecdn.app/v2/image/${encodeURIComponent(photonUrl)}?format=avif&quality=25`, 
+            'imagecdn.app', controller.signal
+        );
+
+        let finalBuffer;
+        let winnerName = '';
+
         try {
-            const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.finalWidth}&output=avif&q=${CONFIG.finalQuality}`;
-            const resWsrv = await fetch(wsrvUrl, { signal: controller.signal });
-            if (resWsrv.ok) {
-                const buffer = Buffer.from(await resWsrv.arrayBuffer());
-                if (buffer.length > 500) { // Validación mínima
-                    clearTimeout(timeoutId);
-                    return sendPassthrough(res, buffer, 'image/avif', 'wsrv.nl', debug);
-                }
-            }
-        } catch (e) {}
-
-        // 2. WSRV.NL FALLBACK (Pedimos WebP Q50 - Más compatible)
-        try {
-            const wsrvUrl2 = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&w=${CONFIG.finalWidth}&output=webp&q=50`;
-            const resWsrv2 = await fetch(wsrvUrl2, { signal: controller.signal });
-            if (resWsrv2.ok) {
-                const buffer = Buffer.from(await resWsrv2.arrayBuffer());
-                if (buffer.length > 500) {
-                    clearTimeout(timeoutId);
-                    return sendPassthrough(res, buffer, 'image/webp', 'wsrv.nl (WebP)', debug);
-                }
-            }
-        } catch (e) {}
-
-        // ============================================================
-        // FASE 2: VERCEL LOCAL (FORZADO)
-        // ============================================================
-        // Si llegamos aquí, los proxies fallaron. Vercel DEBE procesar.
-        console.log('Proxies fallaron. Iniciando procesamiento local FORZADO...');
-
-        const resDirect = await fetch(targetUrl, {
-            headers: getHeaders(targetUrl),
-            signal: controller.signal,
-            redirect: 'follow'
-        });
-
-        if (!resDirect.ok) {
-            throw new Error(`Origen bloqueado: ${resDirect.status}`);
+            // ¡DISPARO DE SALIDA!
+            // Promise.any espera al PRIMERO que tenga éxito (resuelva).
+            // Si uno falla, lo ignora y espera al siguiente.
+            const winner = await Promise.any([
+                racerStatically, 
+                racerWsrv, 
+                racerWeserv, 
+                racerImageCDN
+            ]);
+            
+            finalBuffer = winner.buffer;
+            winnerName = winner.name;
+            
+        } catch (aggregateError) {
+            console.log('Todos los corredores fallaron o excedieron 100KB.');
+            // Si llegamos aquí, nadie ganó la carrera.
         }
-        
-        const originalBuffer = Buffer.from(await resDirect.arrayBuffer());
-        
-        // CONFIGURACIÓN SHARP "A PRUEBA DE FALLOS"
-        const sharpInstance = sharp(originalBuffer, { 
-            animated: true, 
-            limitInputPixels: false,
-            failOnError: false // IMPORTANTE: Si la imagen tiene un error pequeño, la procesa igual
-        });
 
-        const metadata = await sharpInstance.metadata();
-        let pipeline = sharpInstance;
-
-        // 1. Siempre hacemos Trim (si funciona)
-        try { pipeline = pipeline.trim({ threshold: 10 }); } catch (e) {}
-
-        // 2. Redimensionado OBLIGATORIO
-        // Incluso si la imagen es pequeña, aseguramos el ancho para estandarizar.
-        if (metadata.width > CONFIG.finalWidth) {
-            pipeline = pipeline.resize({
-                width: CONFIG.finalWidth, // 720px
-                withoutEnlargement: true,
-                fit: 'inside',
-                kernel: 'lanczos3'
+        // ============================================================
+        // PASO 2: VERCEL LOCAL (PLAN Z)
+        // ============================================================
+        if (!finalBuffer) {
+            console.log('Activando Vercel Local...');
+            
+            // Descargamos de Photon (ligero)
+            const sourceResp = await fetch(photonUrl, { 
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0' } 
             });
-        }
+            
+            let inputBuffer;
+            if (sourceResp.ok) {
+                inputBuffer = Buffer.from(await sourceResp.arrayBuffer());
+            } else {
+                // Fallback a original
+                const directResp = await fetch(targetUrl, { signal: controller.signal });
+                inputBuffer = Buffer.from(await directResp.arrayBuffer());
+            }
 
-        // 3. Conversión a AVIF OBLIGATORIA
-        // Eliminamos la comprobación de tamaño. Enviamos el AVIF procesado SIEMPRE.
-        const compressedBuffer = await pipeline
-            .avif({
-                quality: CONFIG.finalQuality, // 25
-                effort: CONFIG.localEffort,   // 3 (Suficiente para calidad, rápido para no timeout)
-                chromaSubsampling: '4:4:4'    // Texto nítido
-            })
-            .toBuffer();
+            const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
+            // Aseguramos resize (aunque Photon ya debió hacerlo)
+            const metadata = await sharpInstance.metadata();
+            let pipeline = sharpInstance;
+            
+            if (metadata.width > 720) {
+                pipeline = pipeline.resize({ width: 720, withoutEnlargement: true, fit: 'inside', kernel: 'lanczos3' });
+            }
+
+            finalBuffer = await pipeline
+                .avif({
+                    quality: CONFIG.localQuality,
+                    effort: CONFIG.localEffort,
+                    chromaSubsampling: CONFIG.chroma
+                })
+                .toBuffer();
+            
+            winnerName = 'Vercel Local (Fallback)';
+        }
 
         clearTimeout(timeoutId);
 
+        // Respuesta Final
         res.setHeader('Content-Type', 'image/avif');
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('X-Original-Size', originalBuffer.length);
-        res.setHeader('X-Compressed-Size', compressedBuffer.length);
-        res.setHeader('X-Processor', 'Vercel Local (Forced)');
+        res.setHeader('X-Compressed-Size', finalBuffer.length);
+        res.setHeader('X-Processor', winnerName);
 
         if (debug === 'true') {
             return res.json({
-                status: 'Processed Locally',
-                source: 'Direct Fetch',
-                inputSize: originalBuffer.length,
-                outputSize: compressedBuffer.length,
-                note: 'Resize and Compression Enforced'
+                status: 'Success',
+                winner: winnerName,
+                size: finalBuffer.length,
+                mode: winnerName.includes('Vercel') ? 'CPU High' : 'CPU Zero (Race Winner)'
             });
         }
 
-        return res.send(compressedBuffer);
+        return res.send(finalBuffer);
 
     } catch (error) {
-        console.error(`Error Fatal: ${error.message}`);
-        // Solo si realmente explota todo (Timeout, Error 500 real), redirigimos.
-        if (!res.headersSent) return res.redirect(302, targetUrl);
+        // Red de Seguridad Final
+        if (!res.headersSent) return res.redirect(302, `https://i0.wp.com/${targetUrl.replace(/^https?:\/\//, '')}?w=720`);
     }
 }
 
-function sendPassthrough(res, buffer, contentType, source, debug) {
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.setHeader('X-Compressed-Size', buffer.length);
-    res.setHeader('X-Processor', `${source} (Passthrough)`);
-
-    if (debug === 'true') {
-        return res.json({
-            source: source,
-            status: 'Direct Relay',
-            size: buffer.length
+// --- EL ENTRENADOR DE CORREDORES ---
+// Esta función valida que el corredor cumpla las reglas para ganar.
+async function fetchWorker(url, name, signal) {
+    try {
+        const response = await fetch(url, { 
+            signal: signal,
+            headers: { 'User-Agent': 'Mozilla/5.0' }
         });
+
+        if (!response.ok) throw new Error(`${name} HTTP ${response.status}`);
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const type = response.headers.get('content-type') || '';
+
+        // REGLAS PARA GANAR LA CARRERA:
+        // 1. Debe ser una imagen válida (>500 bytes)
+        // 2. Debe pesar menos de 100KB
+        // 3. Debe ser AVIF (Opcional: si quieres ser estricto descomenta la línea siguiente)
+        // if (!type.includes('avif')) throw new Error(`${name} no devolvió AVIF`);
+
+        if (buffer.length < 500) throw new Error(`${name} imagen vacía`);
+        if (buffer.length > CONFIG.maxSizeBytes) throw new Error(`${name} muy pesada (${buffer.length})`);
+
+        return { name, buffer };
+
+    } catch (error) {
+        // Si falla, rechazamos la promesa para que Promise.any siga buscando
+        throw error;
     }
-    return res.send(buffer);
-} 
+}
