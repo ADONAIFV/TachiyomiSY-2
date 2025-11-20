@@ -1,16 +1,16 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: PROTOCOLO HIDRA ---
+// --- CONFIGURACIÓN: PROTOCOLO HIDRA (MODO TURBO) ---
 const CONFIG = {
     // Límite de la "Báscula"
     maxSizeBytes: 100 * 1024, // 100 KB
     
     // Configuración de Vercel (Solo si el proxy falla o la imagen es pesada)
     localFormat: 'avif',
-    localQuality: 25,
-    localEffort: 3,
-    chroma: '4:4:4',
+    localQuality: 20,     // Q20: Compresión agresiva
+    localEffort: 2,       // Effort 2: Velocidad máxima de CPU
+    chroma: '4:4:4',      // Mantiene el texto legible
     
     timeout: 25000
 };
@@ -82,8 +82,8 @@ export default async function handler(req, res) {
             // Como viene de un proxy, ya está en ~720px. Solo convertimos formato.
             const compressedBuffer = await sharpInstance
                 .avif({
-                    quality: CONFIG.localQuality,
-                    effort: CONFIG.localEffort,
+                    quality: CONFIG.localQuality, // 20
+                    effort: CONFIG.localEffort,   // 2
                     chromaSubsampling: CONFIG.chroma
                 })
                 .toBuffer();
