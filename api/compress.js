@@ -1,23 +1,27 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: EL GUARDIÁN DE PESO ---
+// --- CONFIGURACIÓN: PROTOCOLO HIDRA ---
 const CONFIG = {
-    // LÍMITE DE PASO (La "Báscula")
-    maxSizeBytes: 100 * 1024, // 100 KB. Si pesa menos, pasa directo.
+    // Límite de la "Báscula"
+    maxSizeBytes: 100 * 1024, // 100 KB
     
-    // CONFIGURACIÓN PHOTON (Intento Inicial)
-    photonWidth: 720,
-    photonQuality: 60,    // Q60 WebP suele dar <80KB en mayoría de casos
-    
-    // CONFIGURACIÓN VERCEL (Solo si Photon falla el peso)
+    // Configuración de Vercel (Solo si el proxy falla o la imagen es pesada)
     localFormat: 'avif',
-    localQuality: 25,     // AVIF Q25 (Tu estándar de oro)
-    localEffort: 3,       // Effort 3 (Rápido pero eficiente)
-    chroma: '4:4:4',      // Texto nítido
+    localQuality: 25,
+    localEffort: 3,
+    chroma: '4:4:4',
     
-    timeout: 20000
+    timeout: 25000
 };
+
+// LISTA DE CABEZAS DE LA HIDRA (PROXIES)
+const PROVIDERS = [
+    'photon',
+    'wsrv',
+    'statically',
+    'imagecdn'
+];
 
 export default async function handler(req, res) {
     const { url: rawUrl, debug } = req.query;
@@ -27,7 +31,7 @@ export default async function handler(req, res) {
     let targetUrl = rawUrl;
     if (typeof targetUrl === 'string') {
         try { targetUrl = decodeURIComponent(targetUrl); } catch (e) {}
-        // Limpieza para Photon: Quitamos protocolo
+        // Limpieza universal de URL
         targetUrl = targetUrl.replace(/^https?:\/\//, '');
     }
 
@@ -36,62 +40,59 @@ export default async function handler(req, res) {
 
     try {
         // ============================================================
-        // PASO 1: PHOTON (MATERIA PRIMA)
+        // PASO 1: ROTACIÓN DE PROXIES (LA HIDRA)
         // ============================================================
-        // Pedimos a Photon una imagen optimizada en WebP
-        const photonUrl = `https://i0.wp.com/${targetUrl}?w=${CONFIG.photonWidth}&q=${CONFIG.photonQuality}&strip=all`;
+        // Elegimos un "campeón" aleatorio para esta petición.
+        const champion = PROVIDERS[Math.floor(Math.random() * PROVIDERS.length)];
+        const proxyUrl = getProxyUrl(champion, targetUrl);
 
-        const response = await fetch(photonUrl, {
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' 
-            },
+        let response = await fetch(proxyUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
             signal: controller.signal
         });
 
+        // SI FALLA EL CAMPEÓN, INTENTAMOS PHOTON (El más robusto) COMO RESPALDO
         if (!response.ok) {
-            // Si Photon falla, redirigimos a la original
+            const backupUrl = getProxyUrl('photon', targetUrl);
+            response = await fetch(backupUrl, { signal: controller.signal });
+        }
+
+        if (!response.ok) {
+            // Si todo falla, redirigimos original
             return res.redirect(302, rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`);
         }
 
-        // Obtenemos la imagen en memoria
         const inputBuffer = Buffer.from(await response.arrayBuffer());
         const inputSize = inputBuffer.length;
 
         // ============================================================
-        // PASO 2: LA BÁSCULA (DECISIÓN DE VERCEL)
+        // PASO 2: EL GUARDIÁN DE PESO
         // ============================================================
         
         let finalBuffer = inputBuffer;
         let finalFormat = response.headers.get('content-type') || 'image/webp';
-        let processor = 'Photon Direct (Clean Pass)';
-        let isProcessed = false;
+        let processor = `Hydra Node (${champion})`;
 
-        // CONDICIÓN: Si pesa más de 100KB, Vercel interviene.
+        // Si pesa más de 100KB, Vercel interviene
         if (inputSize > CONFIG.maxSizeBytes) {
-            console.log(`Imagen pesada (${Math.round(inputSize/1024)}KB). Iniciando compresión AVIF local...`);
             
+            // Procesamos localmente
             const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
             
-            // Como viene de Photon, ya es 720px. Solo convertimos formato.
-            // Usamos AVIF para bajar esos KB extra.
+            // Como viene de un proxy, ya está en ~720px. Solo convertimos formato.
             const compressedBuffer = await sharpInstance
                 .avif({
-                    quality: CONFIG.localQuality, // 25
-                    effort: CONFIG.localEffort,   // 3
-                    chromaSubsampling: CONFIG.chroma // 4:4:4
+                    quality: CONFIG.localQuality,
+                    effort: CONFIG.localEffort,
+                    chromaSubsampling: CONFIG.chroma
                 })
                 .toBuffer();
 
-            // VERIFICACIÓN DE SEGURIDAD:
-            // Solo usamos la versión de Vercel si realmente logramos bajar el peso.
-            // (A veces AVIF Q25 4:4:4 puede pesar más que WebP Q60 si la imagen es ruido puro)
+            // Verificación de eficiencia (Solo usamos si bajó el peso)
             if (compressedBuffer.length < inputSize) {
                 finalBuffer = compressedBuffer;
                 finalFormat = 'image/avif';
-                processor = 'Vercel Local (Weight Reduction)';
-                isProcessed = true;
-            } else {
-                processor = 'Photon (Vercel tried but failed to reduce)';
+                processor = `Vercel Local (Filtered from ${champion})`;
             }
         }
 
@@ -102,18 +103,17 @@ export default async function handler(req, res) {
         // ============================================================
         res.setHeader('Content-Type', finalFormat);
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('X-Original-Size', 'Photon Source'); // No sabemos el original real, solo el de Photon
         res.setHeader('X-Compressed-Size', finalBuffer.length);
         res.setHeader('X-Processor', processor);
 
         if (debug === 'true') {
             return res.json({
                 status: 'Success',
-                input_from_photon: inputSize,
-                final_output: finalBuffer.length,
+                proxy_used: champion,
+                input_size: inputSize,
+                output_size: finalBuffer.length,
                 processor: processor,
-                limit_100kb: inputSize < CONFIG.maxSizeBytes ? 'PASSED' : 'EXCEEDED (Action Taken)',
-                format: finalFormat
+                limit_check: inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED'
             });
         }
 
@@ -125,5 +125,32 @@ export default async function handler(req, res) {
             const originalFullUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
             return res.redirect(302, originalFullUrl);
         }
+    }
+}
+
+// --- GENERADOR DE URLs PARA CADA CABEZA ---
+function getProxyUrl(provider, url) {
+    const encoded = encodeURIComponent(`https://${url}`);
+    const raw = url; 
+
+    switch (provider) {
+        case 'photon':
+            // Photon: i0.wp.com/URL?w=720&q=60&strip=all
+            return `https://i0.wp.com/${raw}?w=720&q=60&strip=all`;
+        
+        case 'wsrv':
+            // Wsrv: wsrv.nl/?url=URL&w=720&q=50&output=webp
+            return `https://wsrv.nl/?url=${encoded}&w=720&q=50&output=webp`;
+        
+        case 'statically':
+            // Statically: cdn.statically.io/img/URL?w=720&q=50&f=webp
+            return `https://cdn.statically.io/img/${raw}?w=720&q=50&f=webp`;
+            
+        case 'imagecdn':
+            // ImageCDN: imagecdn.app/v2/image/URL?width=720&quality=50&format=webp
+            return `https://imagecdn.app/v2/image/${encoded}?width=720&quality=50&format=webp`;
+            
+        default:
+            return `https://i0.wp.com/${raw}?w=720`;
     }
 }
