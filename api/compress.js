@@ -19,17 +19,20 @@ const CONFIG = {
     cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 7200,
     staleWhileRevalidate: Number(process.env.STALE_WHILE_REVALIDATE) || 604800,
     enableCache: process.env.ENABLE_CACHE !== 'false',
-    cacheSize: Number(process.env.CACHE_SIZE) || 500, // 🔥 Aumentado a 500 imágenes en memoria
+    cacheSize: Number(process.env.CACHE_SIZE) || 2000, // 🔥 Aumentado a 2000 imágenes en memoria (4x más)
     parallelFetches: Number(process.env.PARALLEL_FETCHES) || 6, // 🔥 Aumentado a 6 fetches paralelos
-    // 🔥 Optimizaciones para aprovechar 2 vCPU y 16GB RAM
+    // 🔥 Optimizaciones para aprovechar 2 vCPU y 16GB RAM + 50GB disco
     cacheDir: process.env.CACHE_DIR || '/tmp/compress_cache',
-    maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 4 * 1024 * 1024 * 1024, // 🔥 4GB cache (antes 1GB)
+    maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 50 * 1024 * 1024 * 1024, // 🔥 50GB cache (antes 4GB) - TODO DISCO DISPONIBLE
     maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || Math.min(8, os.cpus().length * 4), // 🔥 8 jobs concurrentes (4 por vCPU)
     enableDiskCache: process.env.ENABLE_DISK_CACHE !== 'false',
     // 🔥 Nuevas optimizaciones para máximo rendimiento
     sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || Math.max(4, os.cpus().length * 2), // 🔥 Sharp con 4+ hilos
     memoryLimit: Number(process.env.MEMORY_LIMIT) || 14 * 1024 * 1024 * 1024, // 🔥 Usar hasta 14GB de los 16GB disponibles
-    batchSize: Number(process.env.BATCH_SIZE) || 10 // 🔥 Procesar en lotes de 10
+    batchSize: Number(process.env.BATCH_SIZE) || 10, // 🔥 Procesar en lotes de 10
+    // 🔥 Optimizaciones para 50GB disco
+    maxDiskCacheItems: Number(process.env.MAX_DISK_CACHE_ITEMS) || 50000, // 🔥 Hasta 50,000 imágenes en disco
+    diskCacheCleanupThreshold: Number(process.env.DISK_CACHE_CLEANUP_THRESHOLD) || 45000 // 🔥 Limpiar cuando llegue a 45,000
 };
 
 // Caché en memoria para URLs procesadas
@@ -95,9 +98,13 @@ async function setDiskCache(cacheKey, buffer, meta) {
         await fs.writeFile(cachePath, buffer);
         await fs.writeFile(metaPath, JSON.stringify({ ...meta, timestamp: Date.now() }));
 
-        // Limpiar caché antiguo si es necesario
-        const files = await fs.readdir(CONFIG.cacheDir);
-        if (files.length > CONFIG.cacheSize * 2) { // Meta + bin files
+        // 🔥 Optimización avanzada para 50GB: Limpiar caché solo cuando sea necesario y en lotes
+        const files = await fs.readdir(CONFIG.cacheDir).catch(() => []);
+        const totalItems = Math.floor(files.length / 2); // Estimación de items (meta + bin)
+
+        if (totalItems > CONFIG.diskCacheCleanupThreshold) {
+            console.log(`🧹 Disk cache cleanup: ${totalItems} items, threshold: ${CONFIG.diskCacheCleanupThreshold}`);
+
             const sortedFiles = files
                 .filter(f => f.endsWith('.json'))
                 .map(f => ({
@@ -111,13 +118,21 @@ async function setDiskCache(cacheKey, buffer, meta) {
 
             fileStats.sort((a, b) => a.mtime - b.mtime);
 
-            // 🔥 Optimización: Procesar eliminación en lotes para mejor rendimiento
-            const toDelete = fileStats.slice(0, Math.max(0, fileStats.length - CONFIG.cacheSize));
-            await Promise.all(toDelete.map(async (file) => {
+            // 🔥 Eliminar en lotes para mejor rendimiento con 50GB
+            const toDelete = fileStats.slice(0, Math.max(0, fileStats.length - CONFIG.maxDiskCacheItems));
+            const deletePromises = toDelete.map(async (file) => {
                 const baseName = file.name.replace('.json', '');
                 await fs.unlink(file.path).catch(() => {});
                 await fs.unlink(path.join(CONFIG.cacheDir, `${baseName}.bin`)).catch(() => {});
-            }));
+            });
+
+            // Procesar eliminaciones en lotes de 100 para no bloquear
+            for (let i = 0; i < deletePromises.length; i += 100) {
+                const batch = deletePromises.slice(i, i + 100);
+                await Promise.all(batch);
+            }
+
+            console.log(`🧹 Cleaned ${toDelete.length} old cache items`);
         }
     } catch (error) {
         console.warn('⚠️  Could not write to disk cache:', error.message);
