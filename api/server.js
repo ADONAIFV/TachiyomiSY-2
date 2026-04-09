@@ -15,14 +15,14 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 7860;
 
-// Configuración optimizada para Vercel compresor puro
+// Configuración optimizada para Vercel Hobby (5min, 2GB RAM, 1vCPU)
 const CONFIG = {
     port: PORT,
     host: '0.0.0.0',
-    maxConcurrentRequests: 2, // 🔥 Vercel tiene límites pero pueden procesarse 2 en paralelo
-    requestTimeout: 25000, // 25 segundos para compresión
-    keepAliveTimeout: 28000,
-    headersTimeout: 29000
+    maxConcurrentRequests: 1, // 🔥 1 request a la vez (1vCPU)
+    requestTimeout: 15000, // 15 segundos (con margen para los 5min)
+    keepAliveTimeout: 16000,
+    headersTimeout: 17000
 };
 
 // Middleware para logging básico
@@ -92,13 +92,12 @@ app.use((err, req, res, next) => {
     }
 });
 
-// Configuración del servidor para Vercel compresor
+// Configuración del servidor para Vercel Hobby
 const server = app.listen(CONFIG.port, CONFIG.host, () => {
-    console.log(`🚀 Tachiyomi Image Compression Service (Vercel Worker)`);
+    console.log(`🚀 Tachiyomi Image Compression (Vercel Hobby Optimized)`);
     console.log(`📍 Running on: http://${CONFIG.host}:${CONFIG.port}`);
-    console.log(`💻 CPUs available: ${os.cpus().length}`);
-    console.log(`🧠 Memory: ${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB total`);
-    console.log(`⏰ Optimized for intensive compression`);
+    console.log(`⚡ Optimized for: 5min max, 2GB RAM, 1vCPU`);
+    console.log(`🔧 Sharp: 1 thread, 256MB memory, 1 effort for speed`);
 });
 
 // Configurar timeouts del servidor
