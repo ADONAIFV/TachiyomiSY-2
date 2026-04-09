@@ -147,18 +147,18 @@ async function fetchImage(originalUrl, controller) {
 }
 
 function getProxyUrl(provider, originalUrl) {
-    const encoded = encodeURIComponent(originalUrl);
-    const raw = originalUrl.replace(/^https?:\/\//i, '');
+    const encodedUrl = encodeURI(originalUrl);
+    const raw = encodeURIComponent(originalUrl.replace(/^https?:\/\//i, ''));
 
     switch (provider) {
         case 'photon':
             return `https://i0.wp.com/${raw}?w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&strip=all`;
         case 'wsrv':
-            return `https://wsrv.nl/?url=${encoded}&w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&output=webp`;
+            return `https://wsrv.nl/?url=${encodedUrl}&w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&output=webp`;
         case 'statically':
             return `https://cdn.statically.io/img/${raw}?w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&f=webp`;
         case 'imagecdn':
-            return `https://imagecdn.app/v2/image/${encoded}?width=${CONFIG.proxyWidth}&quality=${Math.min(100, CONFIG.proxyQuality)}&format=webp`;
+            return `https://imagecdn.app/v2/image/${encodedUrl}?width=${CONFIG.proxyWidth}&quality=${Math.min(100, CONFIG.proxyQuality)}&format=webp`;
         default:
             return `https://i0.wp.com/${raw}?w=${CONFIG.proxyWidth}`;
     }

@@ -69,8 +69,28 @@ form.addEventListener('submit', async (event) => {
     const startTime = Date.now();
 
     try {
+        const debugUrl = `${API_ROOT}?url=${encodeURIComponent(url)}&debug=true`;
+        log('Solicitando metadatos de compresión...', 'info');
+
+        const debugResponse = await fetch(debugUrl);
+        if (!debugResponse.ok) {
+            let errorText = `Error HTTP ${debugResponse.status}`;
+            try {
+                const json = await debugResponse.json();
+                if (json?.error) errorText = json.error + (json.reason ? `: ${json.reason}` : '');
+            } catch {
+                // ignore
+            }
+            throw new Error(errorText);
+        }
+
+        const debugData = await debugResponse.json();
+        if (debugData.status !== 'Success') {
+            throw new Error('El servidor no devolvió estado de éxito');
+        }
+
         const apiUrl = `${API_ROOT}?url=${encodeURIComponent(url)}`;
-        log('Solicitando optimización al servidor...', 'info');
+        log('Solicitando imagen optimizada al servidor...', 'info');
 
         const response = await fetch(apiUrl);
         const latency = Date.now() - startTime;
@@ -80,19 +100,19 @@ form.addEventListener('submit', async (event) => {
             try {
                 const json = await response.json();
                 if (json?.error) errorText = json.error + (json.reason ? `: ${json.reason}` : '');
-            } catch (extractError) {
+            } catch {
                 // ignore
             }
             throw new Error(errorText);
         }
 
-        const inputSize = Number(response.headers.get('X-Input-Size') || 0);
-        const outputSize = Number(response.headers.get('X-Output-Size') || 0);
-        const proxyUsed = response.headers.get('X-Proxy-Used') || 'Desconocido';
+        const inputSize = Number(response.headers.get('X-Input-Size') || debugData.input_size || 0);
+        const outputSize = Number(response.headers.get('X-Output-Size') || debugData.output_size || 0);
+        const proxyUsed = response.headers.get('X-Proxy-Used') || debugData.proxy_used || 'Desconocido';
         const processor = response.headers.get('X-Processor') || 'Desconocido';
         const contentType = response.headers.get('Content-Type') || 'image/webp';
-        const qualityUsed = response.headers.get('X-Quality-Used') || 'N/A';
-        const limitState = response.headers.get('X-Limit-60KB') || 'UNKNOWN';
+        const qualityUsed = response.headers.get('X-Quality-Used') || debugData.quality_used || 'N/A';
+        const limitState = response.headers.get('X-Limit-60KB') || debugData.limit_60kb || 'UNKNOWN';
 
         const blob = await response.blob();
         const optimizedUrl = URL.createObjectURL(blob);
