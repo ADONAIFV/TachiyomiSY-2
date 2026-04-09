@@ -1,16 +1,29 @@
 {
-  "name": "bandwidth-hero-super-ultra",
-  "version": "6.0.0",
-  "description": "Compresión de imágenes extrema, inteligente y robusta para Tachiyomi",
-  "main": "api/compress.js",
+  "name": "tachiyomi-compression-service",
+  "version": "7.0.0",
+  "description": "Servicio de compresión de imágenes optimizado para HF Spaces - Sin límites de tiempo, máximo rendimiento",
+  "main": "api/server.js",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "sharp": "^0.33.4"
+    "sharp": "^0.33.4",
+    "express": "^4.19.2"
   },
-  "author": "ASTAROTH",
+  "scripts": {
+    "start": "node --max-old-space-size=4096 api/server.js",
+    "dev": "node --max-old-space-size=2048 api/server.js",
+    "test": "node --check api/server.js && node --check api/compress.js"
+  },
+  "keywords": [
+    "image-compression",
+    "tachiyomi",
+    "hf-spaces",
+    "sharp",
+    "nodejs"
+  ],
+  "author": "ADONAIFV",
   "license": "MIT"
 }
 
