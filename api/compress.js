@@ -18,17 +18,17 @@ const CONFIG = {
     proxyQuality: Number(process.env.PROXY_QUALITY) || 30,
     cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 3600, // 1 hora
     staleWhileRevalidate: Number(process.env.STALE_WHILE_REVALIDATE) || 86400, // 1 día
-    enableCache: process.env.ENABLE_CACHE === 'true', // 🔥 Deshabilitado por defecto (RAM limitada)
-    cacheSize: Number(process.env.CACHE_SIZE) || 50 * 1024 * 1024, // 🔥 50MB máximo (conservador)
-    parallelFetches: Number(process.env.PARALLEL_FETCHES) || 1, // 🔥 1 fetch (1vCPU)
-    // 🔥 Optimizaciones para Vercel Hobby (5min, 2GB RAM, 1vCPU)
+    enableCache: false, // 🔥 DESHABILITADO - toda la RAM para Sharp
+    cacheSize: 0, // 🔥 CERO - toda la RAM para compresión
+    parallelFetches: Number(process.env.PARALLEL_FETCHES) || 1,
+    // 🔥 Máximo rendimiento con 1.8GB RAM dedicada a Sharp
     cacheDir: process.env.CACHE_DIR || '/tmp/compress_cache',
-    maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 100 * 1024 * 1024, // 100MB temporal
-    maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 1, // 🔥 1 job a la vez
-    enableDiskCache: false, // 🔥 Deshabilitado (/tmp limitado en Vercel)
-    // 🔥 Agresivamente optimizado para Vercel Hobby
-    sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 1, // 🔥 1 hilo (1vCPU disponible)
-    memoryLimit: Number(process.env.MEMORY_LIMIT) || 256 * 1024 * 1024, // 🔥 256MB para Sharp
+    maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 100 * 1024 * 1024,
+    maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 1,
+    enableDiskCache: false,
+    // 🔥 MÁXIMO: 1.8GB para Sharp (dejando 200MB para Node.js/Express)
+    sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 1,
+    memoryLimit: Number(process.env.MEMORY_LIMIT) || 1800 * 1024 * 1024, // 🔥 1.8GB para Sharp
     batchSize: Number(process.env.BATCH_SIZE) || 1, // 🔥 Procesar de uno en uno
     maxDiskCacheItems: Number(process.env.MAX_DISK_CACHE_ITEMS) || 10,
     diskCacheCleanupThreshold: Number(process.env.DISK_CACHE_CLEANUP_THRESHOLD) || 8
@@ -53,10 +53,10 @@ async function initCache() {
         }
     }
 
-    // 🔥 Configurar Sharp para Vercel serverless
+    // 🔥 Configurar Sharp para máximo uso de 1.8GB RAM
     sharp.concurrency(CONFIG.sharpConcurrency);
-    sharp.cache({ memory: CONFIG.memoryLimit, files: 5, items: 10 }); // 🔥 Mínimo caché para Vercel
-    console.log(`🔥 Sharp configured: ${CONFIG.sharpConcurrency} threads, ${Math.round(CONFIG.memoryLimit / 1024 / 1024)}MB memory limit`);
+    sharp.cache({ memory: CONFIG.memoryLimit, files: 200, items: 2000 }); // 🔥 Máximo caché dentro del límite
+    console.log(`🔥 Sharp configured: ${CONFIG.sharpConcurrency} thread, 1.8GB memory limit`);
 }
 
 // Exportar función de inicialización
