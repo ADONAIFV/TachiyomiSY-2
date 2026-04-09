@@ -5,9 +5,10 @@ const CONFIG = {
     localFormat: process.env.LOCAL_FORMAT || 'avif',
     localQuality: Number(process.env.LOCAL_QUALITY) || 30,
     localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 18,
-    localEffort: Number(process.env.LOCAL_EFFORT) || 4,
+    localEffort: Number(process.env.LOCAL_EFFORT) || 2,
     chroma: process.env.CHROMA || '4:4:4',
     timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 25000,
+    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 9000,
     proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
     proxyQuality: Number(process.env.PROXY_QUALITY) || 50,
     cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 3600,
@@ -37,41 +38,42 @@ async function encodeBuffer(inputBuffer, format, quality, effort) {
         .toBuffer();
 }
 
+function withTimeout(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Compression timeout')), ms))
+    ]);
+}
+
 async function compressBuffer(inputBuffer) {
     const format = CONFIG.localFormat;
-    const attempts = [CONFIG.localQuality];
+    const quality = CONFIG.localQuality;
+    const effort = CONFIG.localEffort;
+    let stage = 'base';
 
-    if (CONFIG.localQualityMin < CONFIG.localQuality) {
-        attempts.push(Math.max(CONFIG.localQualityMin, CONFIG.localQuality - 14));
+    try {
+        const buffer = await withTimeout(
+            encodeBuffer(inputBuffer, format, quality, effort),
+            CONFIG.compressionTimeoutMs
+        );
+
+        return {
+            buffer,
+            stage,
+            quality,
+            effort,
+            timeout: false
+        };
+    } catch (error) {
+        return {
+            buffer: null,
+            stage: 'timeout',
+            quality,
+            effort,
+            timeout: true,
+            error: error.message
+        };
     }
-
-    let best = null;
-    let stage = 'initial';
-    let usedQuality = CONFIG.localQuality;
-    let usedEffort = CONFIG.localEffort;
-
-    for (const quality of attempts) {
-        const effort = quality === CONFIG.localQuality ? CONFIG.localEffort : Math.min(CONFIG.localEffort + 2, 8);
-        const candidate = await encodeBuffer(inputBuffer, format, quality, effort);
-
-        if (!best || candidate.length < best.length) {
-            best = candidate;
-            stage = quality === CONFIG.localQuality ? 'base' : 'fallback';
-            usedQuality = quality;
-            usedEffort = effort;
-        }
-
-        if (best.length <= CONFIG.maxSizeBytes) {
-            break;
-        }
-    }
-
-    return {
-        buffer: best,
-        stage,
-        quality: usedQuality,
-        effort: usedEffort
-    };
 }
 
 export default async function handler(req, res) {
@@ -109,16 +111,18 @@ export default async function handler(req, res) {
 
         if (inputSize > CONFIG.maxSizeBytes) {
             const compressedResult = await compressBuffer(inputBuffer);
-            const compressedBuffer = compressedResult.buffer;
 
-            if (compressedBuffer.length < inputSize) {
-                finalBuffer = compressedBuffer;
+            if (compressedResult.buffer && compressedResult.buffer.length < inputSize) {
+                finalBuffer = compressedResult.buffer;
                 finalFormat = `image/${CONFIG.localFormat}`;
                 processor = `Vercel Local (${compressedResult.stage})`;
                 compressed = true;
                 compressionStage = compressedResult.stage;
                 qualityUsed = compressedResult.quality;
                 effortUsed = compressedResult.effort;
+            } else if (compressedResult.timeout) {
+                processor = 'Vercel Local (Timeout)';
+                compressionStage = 'timeout';
             }
         }
 
