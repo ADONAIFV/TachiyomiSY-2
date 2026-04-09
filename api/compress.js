@@ -7,27 +7,32 @@ import os from 'os';
 const CONFIG = {
     maxSizeBytes: Number(process.env.MAX_SIZE_BYTES) || 102400, // 100KB para HF
     localFormat: process.env.LOCAL_FORMAT || 'avif',
-    localQuality: Number(process.env.LOCAL_QUALITY) || 35, // 🔥 Reducido para más velocidad
-    localQualityHigh: Number(process.env.LOCAL_QUALITY_HIGH) || 50,
+    localQuality: Number(process.env.LOCAL_QUALITY) || 25, // 🔥 REDUCIDO a 25% para máxima velocidad
+    localQualityHigh: Number(process.env.LOCAL_QUALITY_HIGH) || 35,
     localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 15,
-    localEffort: Number(process.env.LOCAL_EFFORT) || 2, // 🔥 MÍNIMO effort para MÁXIMA velocidad
-    chroma: process.env.CHROMA || '4:4:4',
-    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 45000, // 🔥 Reducido timeout
-    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 30000, // 🔥 Más agresivo
+    localEffort: Number(process.env.LOCAL_EFFORT) || 1, // 🔥 MÍNIMO effort (1) para máxima velocidad
+    chroma: process.env.CHROMA || '4:4:4', // 🔥 MÁXIMA calidad de croma para texto y letras pequeñas
+    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 30000, // 🔥 Más agresivo
+    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 20000, // 🔥 Muy agresivo
     proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
-    proxyQuality: Number(process.env.PROXY_QUALITY) || 45,
+    proxyQuality: Number(process.env.PROXY_QUALITY) || 30,
     cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 7200,
     staleWhileRevalidate: Number(process.env.STALE_WHILE_REVALIDATE) || 604800,
     enableCache: process.env.ENABLE_CACHE !== 'false',
-    cacheSize: Number(process.env.CACHE_SIZE) || 1500, // 🔥 Reducido para más RAM en procesamiento
-    parallelFetches: Number(process.env.PARALLEL_FETCHES) || 8, // 🔥 Aumentado a 8 fetches paralelos
-    // 🔥 Optimizaciones para MÁXIMO USO DE CPU
+    cacheSize: Number(process.env.CACHE_SIZE) || 1000, // 🔥 Reducido para más RAM en procesamiento
+    parallelFetches: Number(process.env.PARALLEL_FETCHES) || 12, // 🔥 Aumentado a 12 fetches paralelos
+    // 🔥 Optimizaciones para MÁXIMA VELOCIDAD
     cacheDir: process.env.CACHE_DIR || '/tmp/compress_cache',
     maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 50 * 1024 * 1024 * 1024,
-    maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 8, // 🔥 8 jobs concurrentes (4 por vCPU)
+    maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 12, // 🔥 12 jobs concurrentes (6 por vCPU)
     enableDiskCache: process.env.ENABLE_DISK_CACHE !== 'false',
     // 🔥 Optimizaciones para máximo rendimiento CPU
-    sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 4, // 🔥 4 hilos Sharp (2 por vCPU)
+    sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 4, // 🔥 4 hilos Sharp
+    memoryLimit: Number(process.env.MEMORY_LIMIT) || 10 * 1024 * 1024 * 1024, // 🔥 Reducido a 10GB para más CPU
+    batchSize: Number(process.env.BATCH_SIZE) || 20, // 🔥 Procesar en lotes de 20
+    // 🔥 Optimizaciones para 50GB disco
+    maxDiskCacheItems: Number(process.env.MAX_DISK_CACHE_ITEMS) || 20000, // 🔥 Reducido para más RAM
+    diskCacheCleanupThreshold: Number(process.env.DISK_CACHE_CLEANUP_THRESHOLD) || 15000
     memoryLimit: Number(process.env.MEMORY_LIMIT) || 12 * 1024 * 1024 * 1024, // 🔥 Reducido a 12GB para más CPU
     batchSize: Number(process.env.BATCH_SIZE) || 15, // 🔥 Procesar en lotes de 15
     // 🔥 Optimizaciones para 50GB disco
