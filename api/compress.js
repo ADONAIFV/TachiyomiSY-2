@@ -1,4 +1,3 @@
-import fetch from 'node-fetch';
 import sharp from 'sharp';
 
 const CONFIG = {
@@ -9,7 +8,9 @@ const CONFIG = {
     chroma: process.env.CHROMA || '4:4:4',
     timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 25000,
     proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
-    proxyQuality: Number(process.env.PROXY_QUALITY) || 50
+    proxyQuality: Number(process.env.PROXY_QUALITY) || 50,
+    cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 3600,
+    staleWhileRevalidate: Number(process.env.STALE_WHILE_REVALIDATE) || 86400
 };
 
 const PROVIDERS = [
@@ -37,7 +38,7 @@ export default async function handler(req, res) {
     try {
         const result = await fetchImage(normalizedUrl, controller);
         if (!result) {
-            return res.status(502).json({ error: 'No se pudo obtener la imagen desde proxies ni desde la URL original.' });
+            return res.status(502).json({ error: 'No se pudo obtener la imagen desde direct o proxies' });
         }
 
         const { response, provider } = result;
@@ -46,7 +47,8 @@ export default async function handler(req, res) {
 
         let finalBuffer = inputBuffer;
         let finalFormat = response.headers.get('content-type') || 'image/webp';
-        let processor = `Hydra Node (${provider})`;
+        let processor = provider === 'direct' ? 'Direct Download' : `Hydra Node (${provider})`;
+        let compressed = false;
 
         if (inputSize > CONFIG.maxSizeBytes) {
             const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
@@ -60,27 +62,35 @@ export default async function handler(req, res) {
                 finalBuffer = compressedBuffer;
                 finalFormat = `image/${CONFIG.localFormat}`;
                 processor = `Vercel Local (Reduced >${Math.round(CONFIG.maxSizeBytes / 1024)}KB)`;
+                compressed = true;
             }
         }
 
+        const outputSize = finalBuffer.length;
+        const compressionRatio = inputSize > 0 ? Math.round((outputSize / inputSize) * 100) : 100;
+
         res.setHeader('Content-Type', finalFormat);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('Content-Length', String(finalBuffer.length));
+        res.setHeader('Cache-Control', `public, max-age=${CONFIG.cacheMaxAge}, stale-while-revalidate=${CONFIG.staleWhileRevalidate}`);
+        res.setHeader('Content-Length', String(outputSize));
         res.setHeader('X-Input-Size', String(inputSize));
-        res.setHeader('X-Output-Size', String(finalBuffer.length));
+        res.setHeader('X-Output-Size', String(outputSize));
+        res.setHeader('X-Compressed', String(compressed));
         res.setHeader('X-Processor', processor);
         res.setHeader('X-Proxy-Used', provider);
         res.setHeader('X-Limit-60KB', inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED');
         res.setHeader('X-Quality-Used', String(CONFIG.localQuality));
+        res.setHeader('X-Compression-Ratio', `${compressionRatio}%`);
 
         if (debug === 'true') {
             return res.json({
                 status: 'Success',
                 proxy_used: provider,
                 input_size: inputSize,
-                output_size: finalBuffer.length,
+                output_size: outputSize,
                 limit_60kb: inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED',
-                quality_used: CONFIG.localQuality
+                quality_used: CONFIG.localQuality,
+                compressed,
+                compression_ratio: `${compressionRatio}%`
             });
         }
 
@@ -114,51 +124,47 @@ function isImageResponse(response) {
 }
 
 async function fetchImage(originalUrl, controller) {
-    for (const provider of PROVIDERS) {
-        const proxyUrl = getProxyUrl(provider, originalUrl);
-        try {
-            const response = await fetch(proxyUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' },
-                signal: controller.signal
-            });
-
-            if (response.ok && isImageResponse(response)) {
-                return { response, provider };
-            }
-        } catch (error) {
-            // Continue with next proxy
-        }
+    const directResponse = await tryFetch(originalUrl, controller);
+    if (directResponse && isImageResponse(directResponse)) {
+        return { response: directResponse, provider: 'direct' };
     }
 
-    try {
-        const response = await fetch(originalUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: controller.signal
-        });
-
-        if (response.ok && isImageResponse(response)) {
-            return { response, provider: 'direct' };
+    for (const provider of PROVIDERS) {
+        const proxyUrl = getProxyUrl(provider, originalUrl);
+        const response = await tryFetch(proxyUrl, controller);
+        if (response && isImageResponse(response)) {
+            return { response, provider };
         }
-    } catch (error) {
-        // Final direct fallback failed
     }
 
     return null;
 }
 
+async function tryFetch(url, controller) {
+    try {
+        return await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: controller.signal,
+            redirect: 'follow'
+        });
+    } catch {
+        return null;
+    }
+}
+
 function getProxyUrl(provider, originalUrl) {
-    const encodedUrl = encodeURI(originalUrl);
+    const encoded = encodeURIComponent(originalUrl);
     const raw = encodeURIComponent(originalUrl.replace(/^https?:\/\//i, ''));
 
     switch (provider) {
         case 'photon':
             return `https://i0.wp.com/${raw}?w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&strip=all`;
         case 'wsrv':
-            return `https://wsrv.nl/?url=${encodedUrl}&w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&output=webp`;
+            return `https://wsrv.nl/?url=${encoded}&w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&output=webp`;
         case 'statically':
             return `https://cdn.statically.io/img/${raw}?w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&f=webp`;
         case 'imagecdn':
-            return `https://imagecdn.app/v2/image/${encodedUrl}?width=${CONFIG.proxyWidth}&quality=${Math.min(100, CONFIG.proxyQuality)}&format=webp`;
+            return `https://imagecdn.app/v2/image/${encoded}?width=${CONFIG.proxyWidth}&quality=${Math.min(100, CONFIG.proxyQuality)}&format=webp`;
         default:
             return `https://i0.wp.com/${raw}?w=${CONFIG.proxyWidth}`;
     }
