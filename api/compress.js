@@ -349,42 +349,12 @@ export default async function handler(req, res) {
 
             if (debug === 'true') {
                 return res.json({
-                    ...cached.debugData,
-                    cache_status: 'HIT'
+                    ...diskCached.meta,
+                    cache_status: 'DISK-HIT'
                 });
             }
 
-            return res.send(cached.finalBuffer);
-        }
-
-        // Verificar caché en disco
-        const diskCached = await getDiskCache(cacheKey);
-        if (diskCached) {
-            const { buffer, meta } = diskCached;
-
-            res.setHeader('Content-Type', meta.finalFormat);
-            res.setHeader('Cache-Control', `public, max-age=${CONFIG.cacheMaxAge}, stale-while-revalidate=${CONFIG.staleWhileRevalidate}`);
-            res.setHeader('Content-Length', String(meta.outputSize));
-            res.setHeader('X-Input-Size', String(meta.inputSize));
-            res.setHeader('X-Output-Size', String(meta.outputSize));
-            res.setHeader('X-Compressed', String(meta.compressed));
-            res.setHeader('X-Processor', meta.processor);
-            res.setHeader('X-Proxy-Used', meta.provider);
-            res.setHeader('X-Limit-60KB', meta.limitCheck);
-            res.setHeader('X-Quality-Used', String(meta.qualityUsed));
-            res.setHeader('X-Effort-Used', String(meta.effortUsed));
-            res.setHeader('X-Compression-Stage', meta.compressionStage);
-            res.setHeader('X-Compression-Ratio', meta.compressionRatio);
-            res.setHeader('X-Cache-Status', 'DISK_HIT');
-
-            if (debug === 'true') {
-                return res.json({
-                    ...meta.debugData,
-                    cache_status: 'DISK_HIT'
-                });
-            }
-
-            return res.send(buffer);
+            return res.send(diskCached.buffer);
         }
     }
 
