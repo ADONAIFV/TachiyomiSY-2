@@ -12,7 +12,7 @@
     "express": "^4.19.2"
   },
   "scripts": {
-    "start": "node --max-old-space-size=14336 --optimize-for-size --memory-reducer api/server.js",
+    "start": "node --max-old-space-size=12288 --optimize-for-size --memory-reducer --max-semi-space-size=512 --optimize-for-size api/server.js",
     "dev": "node --max-old-space-size=6144 api/server.js",
     "test": "node --check api/server.js && node --check api/compress.js"
   },

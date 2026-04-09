@@ -7,33 +7,32 @@ import os from 'os';
 const CONFIG = {
     maxSizeBytes: Number(process.env.MAX_SIZE_BYTES) || 102400, // 100KB para HF
     localFormat: process.env.LOCAL_FORMAT || 'avif',
-    localQuality: Number(process.env.LOCAL_QUALITY) || 40,
-    localQualityHigh: Number(process.env.LOCAL_QUALITY_HIGH) || 55,
-    localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 20,
-    localEffort: Number(process.env.LOCAL_EFFORT) || 4, // 🔥 Reducido de 6 a 4 para menos CPU
+    localQuality: Number(process.env.LOCAL_QUALITY) || 35, // 🔥 Reducido para más velocidad
+    localQualityHigh: Number(process.env.LOCAL_QUALITY_HIGH) || 50,
+    localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 15,
+    localEffort: Number(process.env.LOCAL_EFFORT) || 2, // 🔥 MÍNIMO effort para MÁXIMA velocidad
     chroma: process.env.CHROMA || '4:4:4',
-    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 60000, // 60s en HF
-    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 45000, // 45s sin prisa
+    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 45000, // 🔥 Reducido timeout
+    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 30000, // 🔥 Más agresivo
     proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
-    proxyQuality: Number(process.env.PROXY_QUALITY) || 50,
+    proxyQuality: Number(process.env.PROXY_QUALITY) || 45,
     cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 7200,
     staleWhileRevalidate: Number(process.env.STALE_WHILE_REVALIDATE) || 604800,
     enableCache: process.env.ENABLE_CACHE !== 'false',
-    cacheSize: Number(process.env.CACHE_SIZE) || 2000, // 🔥 Aumentado a 2000 imágenes en memoria (4x más)
-    parallelFetches: Number(process.env.PARALLEL_FETCHES) || 4, // 🔥 Reducido a 4 fetches paralelos
-    // 🔥 Optimizaciones para aprovechar 2 vCPU y 16GB RAM + 50GB disco
+    cacheSize: Number(process.env.CACHE_SIZE) || 1500, // 🔥 Reducido para más RAM en procesamiento
+    parallelFetches: Number(process.env.PARALLEL_FETCHES) || 8, // 🔥 Aumentado a 8 fetches paralelos
+    // 🔥 Optimizaciones para MÁXIMO USO DE CPU
     cacheDir: process.env.CACHE_DIR || '/tmp/compress_cache',
-    maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 50 * 1024 * 1024 * 1024, // 🔥 50GB cache (antes 4GB) - TODO DISCO DISPONIBLE
-    maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 4, // 🔥 Reducido a 4 jobs concurrentes (2 por vCPU)
+    maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 50 * 1024 * 1024 * 1024,
+    maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 8, // 🔥 8 jobs concurrentes (4 por vCPU)
     enableDiskCache: process.env.ENABLE_DISK_CACHE !== 'false',
-    // 🔥 Nuevas optimizaciones para máximo rendimiento
-    sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 2, // 🔥 Reducido a 2 hilos (1 por vCPU)
-    memoryLimit: Number(process.env.MEMORY_LIMIT) || 14 * 1024 * 1024 * 1024, // 🔥 Usar hasta 14GB de los 16GB disponibles
-    batchSize: Number(process.env.BATCH_SIZE) || 10, // 🔥 Procesar en lotes de 10
+    // 🔥 Optimizaciones para máximo rendimiento CPU
+    sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 4, // 🔥 4 hilos Sharp (2 por vCPU)
+    memoryLimit: Number(process.env.MEMORY_LIMIT) || 12 * 1024 * 1024 * 1024, // 🔥 Reducido a 12GB para más CPU
+    batchSize: Number(process.env.BATCH_SIZE) || 15, // 🔥 Procesar en lotes de 15
     // 🔥 Optimizaciones para 50GB disco
-    maxDiskCacheItems: Number(process.env.MAX_DISK_CACHE_ITEMS) || 50000, // 🔥 Hasta 50,000 imágenes en disco
-    diskCacheCleanupThreshold: Number(process.env.DISK_CACHE_CLEANUP_THRESHOLD) || 45000 // 🔥 Limpiar cuando llegue a 45,000
-};
+    maxDiskCacheItems: Number(process.env.MAX_DISK_CACHE_ITEMS) || 30000, // 🔥 Reducido para más RAM
+    diskCacheCleanupThreshold: Number(process.env.DISK_CACHE_CLEANUP_THRESHOLD) || 25000
 
 // Caché en memoria para URLs procesadas
 const formatCache = new Map();
@@ -219,34 +218,41 @@ async function compressBuffer(inputBuffer) {
     let effort = CONFIG.localEffort;
 
     try {
-        // Primera pasada: calidad normal con máximo esfuerzo
-        best = await encodeBuffer(inputBuffer, format, CONFIG.localQuality, CONFIG.localEffort);
+        // 🔥 PROCESAMIENTO PARALELO: Ejecutar todas las pasadas de compresión simultáneamente
+        const compressions = await Promise.allSettled([
+            // Primera pasada: calidad normal
+            withTimeout(encodeBuffer(inputBuffer, format, CONFIG.localQuality, CONFIG.localEffort), CONFIG.compressionTimeoutMs),
+            // Segunda pasada: mayor calidad
+            withTimeout(encodeBuffer(inputBuffer, format, CONFIG.localQualityHigh, CONFIG.localEffort), CONFIG.compressionTimeoutMs),
+            // Tercera pasada: menor calidad (fallback)
+            withTimeout(encodeBuffer(inputBuffer, format, CONFIG.localQualityMin, CONFIG.localEffort), CONFIG.compressionTimeoutMs)
+        ]);
 
-        // Si no alcanza el tamaño objetivo, intenta con mayor calidad
-        if (best.length > CONFIG.maxSizeBytes * 1.2) {
-            const higherQuality = await encodeBuffer(inputBuffer, format, CONFIG.localQualityHigh, CONFIG.localEffort);
-            
-            if (higherQuality.length < best.length && higherQuality.length < inputBuffer.length) {
-                best = higherQuality;
-                quality = CONFIG.localQualityHigh;
-                stage = 'quality-improved';
-            }
+        // Procesar resultados y elegir el mejor
+        const results = compressions
+            .filter(result => result.status === 'fulfilled')
+            .map(result => result.value)
+            .filter(buffer => buffer && buffer.length > 0);
+
+        if (results.length === 0) {
+            throw new Error('All compression attempts failed');
         }
 
-        // Fallback a menor calidad si es necesario
-        if (best.length > CONFIG.maxSizeBytes) {
-            const lowerQuality = await encodeBuffer(inputBuffer, format, CONFIG.localQualityMin, CONFIG.localEffort);
-            
-            if (lowerQuality.length < best.length) {
-                best = lowerQuality;
-                quality = CONFIG.localQualityMin;
-                stage = 'fallback-quality';
+        // Elegir el mejor resultado (más pequeño que cumpla el límite)
+        best = results[0];
+        for (const result of results) {
+            if (result.length <= CONFIG.maxSizeBytes && result.length < best.length) {
+                best = result;
+                quality = result === results[0] ? CONFIG.localQuality :
+                         result === results[1] ? CONFIG.localQualityHigh : CONFIG.localQualityMin;
+                stage = result === results[0] ? 'base' :
+                       result === results[1] ? 'quality-improved' : 'fallback-quality';
             }
         }
 
         return {
             buffer: best,
-            stage: stage || 'base',
+            stage: stage || 'parallel-optimized',
             quality,
             effort,
             timeout: false
