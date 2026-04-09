@@ -19,8 +19,13 @@ WORKDIR /app
 # Copiar package*.json PRIMERO (separate layer para caché de dependencias)
 COPY package*.json ./
 
-# Instalar dependencias (se cachea si package*.json no cambia)
-RUN npm ci --only=production --no-audit --no-fund
+# Instalar dependencias con npm install en lugar de npm ci
+# Usa caché local si existe, con timeouts extendidos
+RUN npm install --omit=dev --no-audit --no-fund --legacy-peer-deps \
+    --network-timeout=60000 \
+    --fetch-timeout=60000 \
+    --fetch-retries=5 \
+    2>&1 | tee npm-install.log
 
 # Copiar código fuente (se cachea independientemente)
 COPY api/ ./api/
