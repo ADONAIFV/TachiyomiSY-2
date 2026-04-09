@@ -1,21 +1,17 @@
 import fetch from 'node-fetch';
 import sharp from 'sharp';
 
-// --- CONFIGURACIÓN: PROTOCOLO HIDRA (CALIDAD 30 / LÍMITE 60KB) ---
 const CONFIG = {
-    // Límite de la "Báscula": 60 KB
-    maxSizeBytes: 60 * 1024, 
-    
-    // Configuración de Vercel (Modo Flash Alta Fidelidad)
-    localFormat: 'avif',
-    localQuality: 30,     // Q30: Mayor detalle, bordes más suaves
-    localEffort: 0,       // Effort 0: Velocidad máxima
-    chroma: '4:4:4',      // Texto nítido
-    
-    timeout: 25000
+    maxSizeBytes: Number(process.env.MAX_SIZE_BYTES) || 60 * 1024,
+    localFormat: process.env.LOCAL_FORMAT || 'avif',
+    localQuality: Number(process.env.LOCAL_QUALITY) || 30,
+    localEffort: Number(process.env.LOCAL_EFFORT) || 0,
+    chroma: process.env.CHROMA || '4:4:4',
+    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 25000,
+    proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
+    proxyQuality: Number(process.env.PROXY_QUALITY) || 50
 };
 
-// LISTA DE CABEZAS DE LA HIDRA (PROXIES)
 const PROVIDERS = [
     'photon',
     'wsrv',
@@ -26,85 +22,61 @@ const PROVIDERS = [
 export default async function handler(req, res) {
     const { url: rawUrl, debug } = req.query;
 
-    if (!rawUrl) return res.status(400).json({ error: 'Falta ?url=' });
+    if (!rawUrl) {
+        return res.status(400).json({ error: 'Falta ?url=' });
+    }
 
-    let targetUrl = rawUrl;
-    if (typeof targetUrl === 'string') {
-        try { targetUrl = decodeURIComponent(targetUrl); } catch (e) {}
-        targetUrl = targetUrl.replace(/^https?:\/\//, '');
+    const normalizedUrl = normalizeUrl(rawUrl);
+    if (!normalizedUrl) {
+        return res.status(400).json({ error: 'URL inválida' });
     }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.timeout);
 
     try {
-        // ============================================================
-        // PASO 1: ROTACIÓN DE PROXIES
-        // ============================================================
-        const champion = PROVIDERS[Math.floor(Math.random() * PROVIDERS.length)];
-        const proxyUrl = getProxyUrl(champion, targetUrl);
-
-        let response = await fetch(proxyUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: controller.signal
-        });
-
-        if (!response.ok) {
-            const backupUrl = getProxyUrl('photon', targetUrl);
-            response = await fetch(backupUrl, { signal: controller.signal });
+        const result = await fetchImage(normalizedUrl, controller);
+        if (!result) {
+            return res.status(502).json({ error: 'No se pudo obtener la imagen desde proxies ni desde la URL original.' });
         }
 
-        if (!response.ok) {
-            return res.redirect(302, rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`);
-        }
-
+        const { response, provider } = result;
         const inputBuffer = Buffer.from(await response.arrayBuffer());
         const inputSize = inputBuffer.length;
 
-        // ============================================================
-        // PASO 2: EL GUARDIÁN DE PESO (< 60 KB)
-        // ============================================================
-        
         let finalBuffer = inputBuffer;
         let finalFormat = response.headers.get('content-type') || 'image/webp';
-        let processor = `Hydra Node (${champion})`;
+        let processor = `Hydra Node (${provider})`;
 
-        // Si pesa más de 60KB, Vercel interviene
         if (inputSize > CONFIG.maxSizeBytes) {
-            
             const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
-            
-            // Compresión AVIF (Q30 + Effort 0)
-            const compressedBuffer = await sharpInstance
-                .avif({
-                    quality: CONFIG.localQuality, // 30
-                    effort: CONFIG.localEffort,   // 0
-                    chromaSubsampling: CONFIG.chroma
-                })
-                .toBuffer();
+            const compressedBuffer = await sharpInstance[CONFIG.localFormat]({
+                quality: CONFIG.localQuality,
+                effort: CONFIG.localEffort,
+                chromaSubsampling: CONFIG.chroma
+            }).toBuffer();
 
-            // Solo aplicamos si realmente bajó el peso
             if (compressedBuffer.length < inputSize) {
                 finalBuffer = compressedBuffer;
-                finalFormat = 'image/avif';
-                processor = `Vercel Local (Reduced >60KB)`;
+                finalFormat = `image/${CONFIG.localFormat}`;
+                processor = `Vercel Local (Reduced >${Math.round(CONFIG.maxSizeBytes / 1024)}KB)`;
             }
         }
 
-        clearTimeout(timeoutId);
-
-        // ============================================================
-        // PASO 3: ENTREGA
-        // ============================================================
         res.setHeader('Content-Type', finalFormat);
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('X-Compressed-Size', finalBuffer.length);
+        res.setHeader('Content-Length', String(finalBuffer.length));
+        res.setHeader('X-Input-Size', String(inputSize));
+        res.setHeader('X-Output-Size', String(finalBuffer.length));
         res.setHeader('X-Processor', processor);
+        res.setHeader('X-Proxy-Used', provider);
+        res.setHeader('X-Limit-60KB', inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED');
+        res.setHeader('X-Quality-Used', String(CONFIG.localQuality));
 
         if (debug === 'true') {
             return res.json({
                 status: 'Success',
-                proxy_used: champion,
+                proxy_used: provider,
                 input_size: inputSize,
                 output_size: finalBuffer.length,
                 limit_60kb: inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED',
@@ -113,24 +85,81 @@ export default async function handler(req, res) {
         }
 
         return res.send(finalBuffer);
-
     } catch (error) {
         if (!res.headersSent) {
-            const originalFullUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
-            return res.redirect(302, originalFullUrl);
+            return res.status(502).json({ error: 'Error interno', reason: error.message });
         }
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
-function getProxyUrl(provider, url) {
-    const encoded = encodeURIComponent(`https://${url}`);
-    const raw = url; 
+function normalizeUrl(rawUrl) {
+    let candidate = String(rawUrl).trim();
+    if (!/^https?:\/\//i.test(candidate)) {
+        candidate = `https://${candidate}`;
+    }
+
+    try {
+        const url = new URL(candidate);
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function isImageResponse(response) {
+    const type = response.headers.get('content-type');
+    return Boolean(type && type.startsWith('image/'));
+}
+
+async function fetchImage(originalUrl, controller) {
+    for (const provider of PROVIDERS) {
+        const proxyUrl = getProxyUrl(provider, originalUrl);
+        try {
+            const response = await fetch(proxyUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                signal: controller.signal
+            });
+
+            if (response.ok && isImageResponse(response)) {
+                return { response, provider };
+            }
+        } catch (error) {
+            // Continue with next proxy
+        }
+    }
+
+    try {
+        const response = await fetch(originalUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: controller.signal
+        });
+
+        if (response.ok && isImageResponse(response)) {
+            return { response, provider: 'direct' };
+        }
+    } catch (error) {
+        // Final direct fallback failed
+    }
+
+    return null;
+}
+
+function getProxyUrl(provider, originalUrl) {
+    const encoded = encodeURIComponent(originalUrl);
+    const raw = originalUrl.replace(/^https?:\/\//i, '');
 
     switch (provider) {
-        case 'photon': return `https://i0.wp.com/${raw}?w=720&q=60&strip=all`;
-        case 'wsrv': return `https://wsrv.nl/?url=${encoded}&w=720&q=50&output=webp`;
-        case 'statically': return `https://cdn.statically.io/img/${raw}?w=720&q=50&f=webp`;
-        case 'imagecdn': return `https://imagecdn.app/v2/image/${encoded}?width=720&quality=50&format=webp`;
-        default: return `https://i0.wp.com/${raw}?w=720`;
+        case 'photon':
+            return `https://i0.wp.com/${raw}?w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&strip=all`;
+        case 'wsrv':
+            return `https://wsrv.nl/?url=${encoded}&w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&output=webp`;
+        case 'statically':
+            return `https://cdn.statically.io/img/${raw}?w=${CONFIG.proxyWidth}&q=${Math.min(100, CONFIG.proxyQuality)}&f=webp`;
+        case 'imagecdn':
+            return `https://imagecdn.app/v2/image/${encoded}?width=${CONFIG.proxyWidth}&quality=${Math.min(100, CONFIG.proxyQuality)}&format=webp`;
+        default:
+            return `https://i0.wp.com/${raw}?w=${CONFIG.proxyWidth}`;
     }
 }

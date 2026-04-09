@@ -50,6 +50,7 @@
         .log-info { color: var(--secondary); }
         .log-success { color: var(--primary); }
         .log-warn { color: var(--danger); }
+        .alert-box { background: rgba(255, 56, 96, 0.12); border: 1px solid rgba(255, 56, 96, 0.25); color: var(--danger); border-radius: 8px; padding: 0.9rem 1rem; margin-top: 1rem; display: none; }
 
         /* VISOR DE IMAGEN (COMPARADOR) */
         .viewer-container { display: flex; flex-direction: column; height: 100%; gap: 1rem; }
@@ -71,6 +72,13 @@
         .metric-label { font-size: 0.7rem; text-transform: uppercase; color: #666; letter-spacing: 1px; }
         .saving-bar-container { height: 6px; background: #333; border-radius: 3px; margin-top: 10px; overflow: hidden; }
         .saving-bar { height: 100%; background: var(--primary); width: 0%; transition: width 1s ease; }
+        .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+        .detail-card { background: #0d0d0d; border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem; }
+        .detail-label { color: #888; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
+        .detail-value { color: var(--text); font-size: 0.95rem; font-weight: 700; word-break: break-word; }
+        .status-tag { display: inline-flex; align-items: center; justify-content: center; padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+        .status-success { background: rgba(0,255,157,0.12); color: var(--primary); border: 1px solid rgba(0,255,157,0.18); }
+        .status-warn { background: rgba(255,56,96,0.12); color: var(--danger); border: 1px solid rgba(255,56,96,0.18); }
 
         /* API LINK */
         .api-box { background: #000; padding: 10px; font-family: var(--mono); border: 1px dashed #444; color: #888; font-size: 0.8rem; word-break: break-all; cursor: pointer; }
@@ -122,6 +130,20 @@
                         Cargando endpoint...
                     </div>
                 </div>
+                <div class="panel" style="margin-top: 1.5rem;">
+                    <div class="panel-head">
+                        <span>Resumen de Compresión</span>
+                        <span>📊</span>
+                    </div>
+                    <div class="panel-body detail-grid">
+                        <div class="detail-card"><span class="detail-label">Estado</span><span class="detail-value" id="detail-status">Esperando URL</span></div>
+                        <div class="detail-card"><span class="detail-label">Proxy usado</span><span class="detail-value" id="detail-proxy">-</span></div>
+                        <div class="detail-card"><span class="detail-label">Formato salida</span><span class="detail-value" id="detail-format">-</span></div>
+                        <div class="detail-card"><span class="detail-label">Calidad</span><span class="detail-value" id="detail-quality">-</span></div>
+                        <div class="detail-card"><span class="detail-label">Resultado</span><span class="detail-value" id="detail-result">Sin ejecutar</span></div>
+                        <div class="detail-card"><span class="detail-label">Ratio</span><span class="detail-value" id="detail-ratio">-</span></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -133,6 +155,7 @@
             <div id="terminal">
                 <span class="log-line"><span class="log-time">--:--:--</span> System initialized. Waiting for input...</span>
             </div>
+            <div id="error-message" class="alert-box"></div>
         </div>
     </aside>
 
@@ -177,152 +200,6 @@
     </div>
 </main>
 
-<script>
-    // --- CONFIGURACIÓN ---
-    const API_ROOT = window.location.origin + '/api/compress';
-    document.getElementById('api-url').textContent = API_ROOT + '?url=';
-
-    // --- UTILIDADES TERMINAL ---
-    const terminal = document.getElementById('terminal');
-    function log(msg, type = 'info') {
-        const now = new Date().toLocaleTimeString();
-        const line = document.createElement('div');
-        line.className = 'log-line';
-        
-        let colorClass = 'log-info';
-        if (type === 'success') colorClass = 'log-success';
-        if (type === 'warn') colorClass = 'log-warn';
-
-        line.innerHTML = `<span class="log-time">[${now}]</span> <span class="${colorClass}">${msg}</span>`;
-        terminal.appendChild(line);
-        terminal.scrollTop = terminal.scrollHeight;
-    }
-
-    // --- LÓGICA PRINCIPAL ---
-    document.getElementById('compress-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const url = document.getElementById('url-input').value;
-        const btn = document.getElementById('btn-action');
-        
-        // Reset UI
-        btn.disabled = true;
-        btn.textContent = "PROCESANDO...";
-        document.getElementById('placeholder-msg').style.display = 'none';
-        document.getElementById('slider-container').style.display = 'none';
-        terminal.innerHTML = '';
-        
-        // Simulación de proceso en Terminal
-        log("Iniciando secuencia de optimización...", "info");
-        log(`Objetivo: ${url.substring(0, 30)}...`, "info");
-        
-        const startTime = Date.now();
-
-        try {
-            log("Contactando Photon CDN para pre-procesamiento...", "warn");
-            
-            const apiUrl = `${API_ROOT}?url=${encodeURIComponent(url)}`;
-            const response = await fetch(apiUrl);
-            
-            const latency = Date.now() - startTime;
-            log(`Respuesta recibida en ${latency}ms`, "success");
-
-            if (!response.ok) throw new Error(`Error HTTP ${response.status}`);
-
-            // Extracción de Headers (La historia del proceso)
-            const processor = response.headers.get('X-Processor') || 'Unknown';
-            const compSize = parseInt(response.headers.get('X-Compressed-Size') || 0);
-            const contentType = response.headers.get('Content-Type');
-            
-            // Simulamos el peso original basándonos en si fue comprimido o no
-            // (Como Photon no nos da el peso original real, estimamos para la demo)
-            let origSizeEst = compSize; 
-            if (processor.includes('Vercel')) {
-                origSizeEst = Math.round(compSize * 3.5); // Estimación: AVIF suele ser 3-4 veces menor
-                log("⚠️ ALERTA: Peso excedió 100KB en Photon.", "warn");
-                log("⚙️ Vercel Engine ACTIVADO: Compresión AVIF Q25.", "warn");
-            } else {
-                log("✅ PESO SEGURO: < 100KB detectado.", "success");
-                log("💨 Modo Passthrough: Retransmisión directa.", "success");
-            }
-
-            log(`Procesador Final: ${processor}`, "info");
-            log(`Formato de Salida: ${contentType.toUpperCase()}`, "info");
-
-            // Convertir a Blob para visualizar
-            const blob = await response.blob();
-            const imgUrl = URL.createObjectURL(blob);
-
-            // Actualizar Dashboard
-            updateMetrics(latency, origSizeEst, compSize);
-            setupSlider(url, imgUrl);
-
-            btn.disabled = false;
-            btn.textContent = "INICIAR SECUENCIA";
-
-        } catch (error) {
-            log(`FATAL ERROR: ${error.message}`, "warn");
-            btn.disabled = false;
-            btn.textContent = "REINTENTAR";
-        }
-    });
-
-    // --- MÉTRICAS VISUALES ---
-    function updateMetrics(latency, orig, comp) {
-        document.getElementById('val-latency').textContent = latency + 'ms';
-        document.getElementById('val-orig').textContent = formatBytes(orig);
-        document.getElementById('val-final').textContent = formatBytes(comp);
-        
-        const saving = orig > 0 ? Math.round(((orig - comp) / orig) * 100) : 0;
-        const finalSaving = saving < 0 ? 0 : saving; // Evitar negativos si Photon ya estaba optimizado
-        
-        document.getElementById('val-save').textContent = finalSaving + '%';
-        document.getElementById('bar-save').style.width = finalSaving + '%';
-    }
-
-    function formatBytes(bytes) {
-        if (!+bytes) return '0 B';
-        const sizes = ['B', 'KB', 'MB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(1024));
-        return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(1))} ${sizes[i]}`;
-    }
-
-    // --- SLIDER INTERACTIVO ---
-    function setupSlider(originalUrl, newUrl) {
-        const slider = document.getElementById('slider-container');
-        const imgBefore = document.getElementById('img-before');
-        const imgAfter = document.getElementById('img-after');
-        const handle = document.querySelector('.slider-handle');
-        
-        slider.style.display = 'block';
-        imgBefore.src = originalUrl; // URL Original
-        imgAfter.src = newUrl;       // URL Blob Optimizado
-
-        let isDragging = false;
-
-        function move(e) {
-            if (!isDragging) return;
-            const rect = slider.getBoundingClientRect();
-            let x = (e.clientX || e.touches[0].clientX) - rect.left;
-            x = Math.max(0, Math.min(x, rect.width));
-            const percent = (x / rect.width) * 100;
-            
-            handle.style.left = percent + '%';
-            imgAfter.style.clipPath = `polygon(0 0, ${percent}% 0, ${percent}% 100%, 0 100%)`;
-        }
-
-        slider.addEventListener('mousedown', () => isDragging = true);
-        slider.addEventListener('touchstart', () => isDragging = true);
-        window.addEventListener('mouseup', () => isDragging = false);
-        window.addEventListener('touchend', () => isDragging = false);
-        window.addEventListener('mousemove', move);
-        window.addEventListener('touchmove', move);
-    }
-
-    function copyToClipboard() {
-        const text = document.getElementById('api-url').textContent;
-        navigator.clipboard.writeText(text);
-        log("Endpoint copiado al portapapeles", "success");
-    }
-</script>
+<script src="app.js"></script>
 </body>
 </html>
