@@ -1,34 +1,36 @@
 FROM node:24-slim
 
-# Instalar dependencias del sistema para Sharp y optimizaciones
-RUN apt-get update && apt-get install -y \
+# Actualizar y instalar dependencias del sistema en una sola capa
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3 \
     curl \
+    ca-certificates \
     libvips-dev \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
     libgif-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 WORKDIR /app
 
 # Copiar archivos de configuración primero para aprovechar cache de Docker
 COPY package*.json ./
 
-# Instalar dependencias con optimizaciones
-RUN npm ci --only=production --no-audit --no-fund
+# Instalar dependencias con optimizaciones (con 10 minutos de timeout)
+RUN npm ci --only=production --no-audit --no-fund --fetch-timeout=600000 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
 
 # Copiar código fuente
 COPY api/ ./api/
 COPY public/ ./public/
 
-# Crear directorio de caché con permisos correctos
-RUN mkdir -p /tmp/compress_cache && chmod 755 /tmp/compress_cache && chown -R node:node /tmp/compress_cache
-
-# Cambiar propietario de los archivos copiados
-RUN chown -R node:node /app
+# Crear directorio de caché y asignar permisos en una capa consolidada
+RUN mkdir -p /tmp/compress_cache && \
+    chmod 755 /tmp/compress_cache && \
+    chown -R node:node /tmp/compress_cache && \
+    chown -R node:node /app
 
 
 # Variables de entorno optimizadas para aprovechar 2 vCPU y 16GB RAM
