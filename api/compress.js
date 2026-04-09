@@ -4,7 +4,8 @@ const CONFIG = {
     maxSizeBytes: Number(process.env.MAX_SIZE_BYTES) || 60 * 1024,
     localFormat: process.env.LOCAL_FORMAT || 'avif',
     localQuality: Number(process.env.LOCAL_QUALITY) || 30,
-    localEffort: Number(process.env.LOCAL_EFFORT) || 0,
+    localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 18,
+    localEffort: Number(process.env.LOCAL_EFFORT) || 4,
     chroma: process.env.CHROMA || '4:4:4',
     timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 25000,
     proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
@@ -19,6 +20,59 @@ const PROVIDERS = [
     'statically',
     'imagecdn'
 ];
+
+function getCompressionOptions(format, quality, effort) {
+    const options = { quality, effort };
+
+    if (['avif', 'webp', 'heif'].includes(format)) {
+        options.chromaSubsampling = CONFIG.chroma;
+    }
+
+    return options;
+}
+
+async function encodeBuffer(inputBuffer, format, quality, effort) {
+    return sharp(inputBuffer, { animated: true, limitInputPixels: false })
+        .toFormat(format, getCompressionOptions(format, quality, effort))
+        .toBuffer();
+}
+
+async function compressBuffer(inputBuffer) {
+    const format = CONFIG.localFormat;
+    const attempts = [CONFIG.localQuality];
+
+    if (CONFIG.localQualityMin < CONFIG.localQuality) {
+        attempts.push(Math.max(CONFIG.localQualityMin, CONFIG.localQuality - 14));
+    }
+
+    let best = null;
+    let stage = 'initial';
+    let usedQuality = CONFIG.localQuality;
+    let usedEffort = CONFIG.localEffort;
+
+    for (const quality of attempts) {
+        const effort = quality === CONFIG.localQuality ? CONFIG.localEffort : Math.min(CONFIG.localEffort + 2, 8);
+        const candidate = await encodeBuffer(inputBuffer, format, quality, effort);
+
+        if (!best || candidate.length < best.length) {
+            best = candidate;
+            stage = quality === CONFIG.localQuality ? 'base' : 'fallback';
+            usedQuality = quality;
+            usedEffort = effort;
+        }
+
+        if (best.length <= CONFIG.maxSizeBytes) {
+            break;
+        }
+    }
+
+    return {
+        buffer: best,
+        stage,
+        quality: usedQuality,
+        effort: usedEffort
+    };
+}
 
 export default async function handler(req, res) {
     const { url: rawUrl, debug } = req.query;
@@ -49,20 +103,22 @@ export default async function handler(req, res) {
         let finalFormat = response.headers.get('content-type') || 'image/webp';
         let processor = provider === 'direct' ? 'Direct Download' : `Hydra Node (${provider})`;
         let compressed = false;
+        let compressionStage = 'none';
+        let qualityUsed = CONFIG.localQuality;
+        let effortUsed = CONFIG.localEffort;
 
         if (inputSize > CONFIG.maxSizeBytes) {
-            const sharpInstance = sharp(inputBuffer, { animated: true, limitInputPixels: false });
-            const compressedBuffer = await sharpInstance[CONFIG.localFormat]({
-                quality: CONFIG.localQuality,
-                effort: CONFIG.localEffort,
-                chromaSubsampling: CONFIG.chroma
-            }).toBuffer();
+            const compressedResult = await compressBuffer(inputBuffer);
+            const compressedBuffer = compressedResult.buffer;
 
             if (compressedBuffer.length < inputSize) {
                 finalBuffer = compressedBuffer;
                 finalFormat = `image/${CONFIG.localFormat}`;
-                processor = `Vercel Local (Reduced >${Math.round(CONFIG.maxSizeBytes / 1024)}KB)`;
+                processor = `Vercel Local (${compressedResult.stage})`;
                 compressed = true;
+                compressionStage = compressedResult.stage;
+                qualityUsed = compressedResult.quality;
+                effortUsed = compressedResult.effort;
             }
         }
 
@@ -78,7 +134,9 @@ export default async function handler(req, res) {
         res.setHeader('X-Processor', processor);
         res.setHeader('X-Proxy-Used', provider);
         res.setHeader('X-Limit-60KB', inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED');
-        res.setHeader('X-Quality-Used', String(CONFIG.localQuality));
+        res.setHeader('X-Quality-Used', String(qualityUsed));
+        res.setHeader('X-Effort-Used', String(effortUsed));
+        res.setHeader('X-Compression-Stage', compressionStage);
         res.setHeader('X-Compression-Ratio', `${compressionRatio}%`);
 
         if (debug === 'true') {
@@ -88,7 +146,9 @@ export default async function handler(req, res) {
                 input_size: inputSize,
                 output_size: outputSize,
                 limit_60kb: inputSize < CONFIG.maxSizeBytes ? 'PASS' : 'OPTIMIZED',
-                quality_used: CONFIG.localQuality,
+                quality_used: qualityUsed,
+                effort_used: effortUsed,
+                compression_stage: compressionStage,
                 compressed,
                 compression_ratio: `${compressionRatio}%`
             });
