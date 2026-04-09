@@ -10,10 +10,10 @@ const CONFIG = {
     localQuality: Number(process.env.LOCAL_QUALITY) || 25, // 🔥 Calidad 25% para compresión rápida
     localQualityHigh: Number(process.env.LOCAL_QUALITY_HIGH) || 35,
     localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 15,
-    localEffort: Number(process.env.LOCAL_EFFORT) || 1, // 🔥 Effort 1 para máxima velocidad en 1vCPU
+    localEffort: Number(process.env.LOCAL_EFFORT) || 2, // 🔥 Effort 2 para mejor calidad
     chroma: process.env.CHROMA || '4:4:4', // 🔥 Calidad de croma
-    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 15000, // 🔥 15s timeout (dentro del límite 5min)
-    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 12000, // 🔥 12s para compresión
+    timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 60000, // 🔥 1min timeout (dentro del límite 5min)
+    compressionTimeoutMs: Number(process.env.COMPRESSION_TIMEOUT_MS) || 55000, // 🔥 55s para compresión
     proxyWidth: Number(process.env.PROXY_WIDTH) || 720,
     proxyQuality: Number(process.env.PROXY_QUALITY) || 30,
     cacheMaxAge: Number(process.env.CACHE_MAX_AGE) || 3600, // 1 hora
@@ -26,9 +26,9 @@ const CONFIG = {
     maxCacheSize: Number(process.env.MAX_CACHE_SIZE) || 100 * 1024 * 1024,
     maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS) || 1,
     enableDiskCache: false,
-    // 🔥 MÁXIMO: 1.8GB para Sharp (dejando 200MB para Node.js/Express)
+    // 🔥 MÁXIMO: 1.5GB para Sharp (dejando 500MB para Node.js/Express)
     sharpConcurrency: Number(process.env.SHARP_CONCURRENCY) || 1,
-    memoryLimit: Number(process.env.MEMORY_LIMIT) || 1800 * 1024 * 1024, // 🔥 1.8GB para Sharp
+    memoryLimit: Number(process.env.MEMORY_LIMIT) || 1500 * 1024 * 1024, // 🔥 1.5GB para Sharp
     batchSize: Number(process.env.BATCH_SIZE) || 1, // 🔥 Procesar de uno en uno
     maxDiskCacheItems: Number(process.env.MAX_DISK_CACHE_ITEMS) || 10,
     diskCacheCleanupThreshold: Number(process.env.DISK_CACHE_CLEANUP_THRESHOLD) || 8
