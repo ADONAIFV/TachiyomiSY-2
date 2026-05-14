@@ -7,9 +7,9 @@ import os from 'os';
 const CONFIG = {
     maxSizeBytes: Number(process.env.MAX_SIZE_BYTES) || 102400, // 100KB para Vercel Hobby
     localFormat: process.env.LOCAL_FORMAT || 'avif',
-    localQuality: Number(process.env.LOCAL_QUALITY) || 25, // 🔥 Calidad 25% para compresión rápida
+    localQuality: Number(process.env.LOCAL_QUALITY) || 35, // 🔥 Calidad 25% para compresión rápida
     localQualityHigh: Number(process.env.LOCAL_QUALITY_HIGH) || 30,
-    localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 15,
+    localQualityMin: Number(process.env.LOCAL_QUALITY_MIN) || 25,
     localEffort: Number(process.env.LOCAL_EFFORT) || 0, // 🔥 Effort 1 para máxima velocidad en 1vCPU
     chroma: process.env.CHROMA || '4:4:4', // 🔥 Calidad de croma
     timeout: Number(process.env.REQUEST_TIMEOUT_MS) || 60000, // 🔥 1min timeout (dentro del límite 5min)
